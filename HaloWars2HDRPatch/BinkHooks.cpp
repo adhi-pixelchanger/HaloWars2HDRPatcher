@@ -11,6 +11,11 @@ namespace
 using PfnBinkOpen = void*(__stdcall*)(const char* name, UINT32 flags);
 using PfnBinkClose = void(__stdcall*)(void* bink);
 
+// Identified from a log: the one BinkOpen whose "name" decoded to the KB2j Bink
+// 2 magic instead of a path had this bit set. With it, name points at the video
+// data, so it is not a string - it must not be read as one, let alone filtered.
+constexpr UINT32 kBinkFromMemory = 0x04000000;
+
 PfnBinkOpen g_origOpen = nullptr;
 PfnBinkClose g_origClose = nullptr;
 
@@ -64,13 +69,26 @@ bool MovieMatchesFilter(const char* name, const std::wstring& filter)
 
 void* __stdcall HookBinkOpen(const char* name, UINT32 flags)
 {
-    const bool gateThisMovie = MovieMatchesFilter(name, g_config.gateFilter);
+    const bool fromMemory = (flags & kBinkFromMemory) != 0;
+    const bool gateThisMovie =
+        !fromMemory && MovieMatchesFilter(name, g_config.gateFilter);
 
-    Log(L"BinkOpen(\"%S\", flags=0x%08X)", name != nullptr ? name : "(null)", flags);
-    Log(L"    gate filter \"%s\": %s",
-        g_config.gateFilter.empty() ? L"(every movie)" : g_config.gateFilter.c_str(),
-        gateThisMovie ? L"GATING this movie (display presented as SDR)"
-                      : L"leaving this movie in the host's own HDR path");
+    if (fromMemory)
+    {
+        Log(L"BinkOpen(from memory, flags=0x%08X): no name to match, left in the "
+            L"host's own HDR path",
+            flags);
+    }
+    else
+    {
+        Log(L"BinkOpen(\"%S\", flags=0x%08X)", name != nullptr ? name : "(null)",
+            flags);
+        Log(L"    gate filter \"%s\": %s",
+            g_config.gateFilter.empty() ? L"(every movie)"
+                                        : g_config.gateFilter.c_str(),
+            gateThisMovie ? L"GATING this movie (display presented as SDR)"
+                          : L"leaving this movie in the host's own HDR path");
+    }
 
     if (gateThisMovie)
     {
@@ -122,8 +140,7 @@ bool ResolveBinkExports()
     auto close = reinterpret_cast<PfnBinkClose>(GetProcAddress(bink, "BinkClose"));
     if (open == nullptr || close == nullptr)
     {
-        Log(L"[!] %s does not export BinkOpen/BinkClose - wrong module name? The "
-            L"gate cannot be driven without both.",
+        Log(L"[!] %s does not export BinkOpen/BinkClose",
             kBinkModule);
         return false;
     }

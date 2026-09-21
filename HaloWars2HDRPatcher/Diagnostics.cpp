@@ -3,7 +3,7 @@
 // Only MicrosoftSignedOnly (Code Integrity Guard) blocks this design.
 // DisableExtensionPoints blocks SetWindowsHookEx loaders, not
 // CreateRemoteThread; Arbitrary Code Guard does not apply, because no
-// executable memory is allocated and the vtable patches touch .rdata.
+// executable memory is allocated and the import-table patches touch .idata.
 
 #include "Launcher.h"
 
