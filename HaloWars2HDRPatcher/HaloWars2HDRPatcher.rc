@@ -1,0 +1,96 @@
+// HaloWars2HDRPatcher.rc - dialog templates.
+
+#include <windows.h>
+#include "resource.h"
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+//////////////////////////////////////////////////////////////////////////////
+// Simple dialog - what almost everyone sees.
+//
+// One narrow column: title, mode, the two buttons, and the status row last.
+// Nothing sits beside anything else except the status text and its indicator,
+// so there is no horizontal alignment to drift.
+
+// Width and height must match kSimpleClientWidth / kSimpleClientHeight in
+// Gui.cpp. The frame widens to the panel's own size for the advanced view.
+IDD_MAIN DIALOGEX 0, 0, 200, 186
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+EXSTYLE WS_EX_APPWINDOW | WS_EX_CONTROLPARENT
+CAPTION "Halo Wars 2 HDR Patcher"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "Halo Wars 2 HDR Patcher", IDC_HEADLINE, 12, 14, 176, 18
+
+    LTEXT           "Mode:", IDC_MODELABEL, 12, 44, 176, 8
+    COMBOBOX        IDC_MAINMODE, 12, 56, 176, 80,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+
+    DEFPUSHBUTTON   "Launch Halo Wars 2", IDC_GO, 12, 82, 176, 18
+    PUSHBUTTON      "Advanced", IDC_TESTING, 12, 104, 176, 18
+
+    // Status last: text on the left, indicator on the right.
+    LTEXT           "Ready.", IDC_STATUSTEXT, 12, 132, 140, 12
+    LTEXT           "", IDC_STATUSDETAIL, 12, 146, 140, 32
+    CONTROL         "", IDC_STATUSICON, "Static", SS_OWNERDRAW, 162, 130, 24, 24
+END
+
+//////////////////////////////////////////////////////////////////////////////
+// Advanced dialog - everything, for investigating a new title.
+//
+// Its size is NOT duplicated in Gui.cpp; LayoutView measures this window.
+//
+// Order is deliberate: the hook DLL's own settings come first because they are
+// what anyone opening this panel came to change. Target discovery is below
+// them, and it defaults correctly.
+
+IDD_TESTING DIALOGEX 0, 0, 480, 384
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
+EXSTYLE WS_EX_CONTROLPARENT
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    // Settings one per line down the left, actions stacked down the right.
+    GROUPBOX        "Hook DLL", IDC_STATIC, 7, 4, 466, 126
+
+    LTEXT           "Mode:", IDC_STATIC, 14, 18, 200, 8
+    COMBOBOX        IDC_MODE, 14, 28, 200, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+
+    LTEXT           "Gate only movies matching:", IDC_STATIC, 14, 48, 200, 8
+    EDITTEXT        IDC_GATEFILTER, 14, 58, 200, 12, ES_AUTOHSCROLL
+
+    CONTROL         "Write a hook log (requires HW2HDRPATCH_LOGGING=1)", IDC_HOOKSLOG,
+                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 78, 200, 10
+    CONTROL         "Also write it to a file (not just the debugger)", IDC_LOGTOFILE,
+                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 92, 200, 10
+
+    PUSHBUTTON      "Defaults", IDC_DEFAULTS, 14, 108, 60, 14
+
+    DEFPUSHBUTTON   "Launch && Inject", IDC_LAUNCH, 366, 18, 100, 16
+    PUSHBUTTON      "Launch (Env Var Cfg)", IDC_LAUNCHENV, 366, 40, 100, 16
+    PUSHBUTTON      "Copy report", IDC_COPY, 366, 62, 100, 16
+    PUSHBUTTON      "Simple", IDC_SIMPLE, 366, 84, 100, 16
+
+    GROUPBOX        "Target application", IDC_STATIC, 7, 136, 466, 90
+
+    LTEXT           "Package filter:", IDC_STATIC, 14, 151, 52, 8
+    COMBOBOX        IDC_PACKAGE, 70, 149, 300, 120, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "Refresh list", IDC_REFRESH, 376, 148, 90, 14
+
+    LTEXT           "Full name:", IDC_STATIC, 14, 169, 52, 8
+    EDITTEXT        IDC_FULLNAME, 70, 167, 300, 12, ES_AUTOHSCROLL | ES_READONLY | NOT WS_TABSTOP
+    PUSHBUTTON      "Resolve", IDC_RESOLVE, 376, 166, 90, 14
+
+    LTEXT           "AUMID:", IDC_STATIC, 14, 187, 52, 8
+    EDITTEXT        IDC_AUMID, 70, 185, 396, 12, ES_AUTOHSCROLL | ES_READONLY | NOT WS_TABSTOP
+
+    LTEXT           "DLL:", IDC_STATIC, 14, 205, 52, 8
+    EDITTEXT        IDC_DLLPATH, 70, 203, 300, 12, ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...", IDC_BROWSE, 376, 202, 90, 14
+
+    EDITTEXT        IDC_VERDICT, 7, 232, 466, 28,
+                    ES_MULTILINE | ES_READONLY | NOT WS_TABSTOP | WS_BORDER
+
+    LTEXT           "Report:", IDC_STATIC, 7, 266, 60, 8
+    EDITTEXT        IDC_LOG, 7, 277, 466, 100,
+                    ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_BORDER
+END
