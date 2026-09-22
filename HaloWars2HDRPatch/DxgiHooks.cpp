@@ -1,12 +1,13 @@
-// DxgiHooks.cpp - the pair of DXGI lies, and the gate that scopes them.
+// DxgiHooks.cpp - the DXGI descriptor lie, and the gate that scopes it.
 //
 // Invariant: with the gate shut every override returns the real object's answer
 // untouched, and no override initiates a DXGI call of its own.
 //
-// The install creates no factory and writes to no vtable - it redirects the
-// host's imports of CreateDXGIFactory/1/2 and hands back a wrapper around what
-// DXGI returned. Every DXGI object the host reaches through one of ours comes
-// back wrapped in turn, which is how the two overridden methods are reached.
+// The install creates no factory - it redirects the host's imports of
+// CreateDXGIFactory1/2 and hands back a wrapper around what DXGI returned. The
+// swap chains and outputs the host reaches through it come back wrapped in
+// turn, which is how IDXGIOutput6::GetDesc1 and
+// IDXGISwapChain3::CheckColorSpaceSupport are reached.
 
 #include "Hooks.h"
 
@@ -126,8 +127,8 @@ const wchar_t* FormatName(DXGI_FORMAT format)
     }
 }
 
-// The hole the wrapper design can have that vtable patching could not: an
-// interface we do not answer for leaves the host holding the real object.
+// An interface we do not answer for leaves the host holding the real object,
+// out of our reach from then on.
 void LogQueryInterface(const wchar_t* who, REFIID riid, bool proxied)
 {
     const int index = IidIndex(riid);
@@ -430,7 +431,7 @@ void WrapOutput(IDXGIOutput** output)
     Log(L"IDXGIOutput: wrapped=%d", wrapped );
 }
 
-// --- the swap chain: the colour-space downgrade ----------------------------
+// --- the swap chain: the way to the output ---------------------------------
 
 class SwapChainProxy final : public Proxy<IDXGISwapChain4>
 {
@@ -453,29 +454,6 @@ public:
         }
         return hr;
     }
-
-    // @TODO remove this if testing shows the plain forward works correctly
-    //HRESULT STDMETHODCALLTYPE SetColorSpace1(DXGI_COLOR_SPACE_TYPE colorSpace) override
-    //{
-    //    const bool gated = IsGateOpen();
-
-    //    // Whether the host re-asserts its colour space after a close decides
-    //    // whether HDR comes back, and this is the only place that is visible.
-    //    Log(L"host SetColorSpace1(%d %s) [gate %s]", static_cast<int>(colorSpace),
-    //        IsHdr(colorSpace) ? L"HDR" : L"SDR", gated ? L"open" : L"shut");
-
-    //    if (gated && IsHdr(colorSpace))
-    //    {
-    //        const HRESULT hr =
-    //            m_real->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
-    //        Log(L"    downgraded to sRGB (0x%08X)", hr);
-
-    //        // The host likely does not handle an error here.
-    //        return SUCCEEDED(hr) ? hr : S_OK;
-    //    }
-
-    //    return m_real->SetColorSpace1(colorSpace);
-    //}
 
     HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput** output) override
     {
@@ -528,7 +506,11 @@ public:
                 (L"host ResizeBuffers(%u buffers, %ux%u, %s, flags 0x%X) (0x%08X)",
                  bufferCount, width, height, FormatName(newFormat), swapChainFlags, result))
 
-    FORWARD(HRESULT, SetColorSpace1, (DXGI_COLOR_SPACE_TYPE colorSpace), (colorSpace))
+    // Whether the host re-asserts HDR after a close is only visible here.
+    FORWARD_LOG(HRESULT, SetColorSpace1, (DXGI_COLOR_SPACE_TYPE colorSpace),
+                (colorSpace),
+                (L"host SetColorSpace1(%d %s) (0x%08X)", static_cast<int>(colorSpace),
+                 IsHdr(colorSpace) ? L"HDR" : L"SDR", result))
     FORWARD(HRESULT, ResizeTarget, (const DXGI_MODE_DESC* parameters), (parameters))
     FORWARD(HRESULT, GetFrameStatistics, (DXGI_FRAME_STATISTICS* stats), (stats))
     FORWARD(HRESULT, GetLastPresentCount, (UINT* lastPresentCount),
@@ -603,8 +585,7 @@ void WrapSwapChain(Slot** swapChain)
     [[maybe_unused]] const bool wrapped =
         Wrap<SwapChainProxy, IDXGISwapChain4>(swapChain);
     Log(L"IDXGISwapChain: %s",
-        wrapped ? L"wrapped; SetColorSpace1 answers the gate"
-                : L"[!] no IDXGISwapChain4 - the swap-chain downgrade cannot be made, fatal");
+        wrapped ? L"wrapped" : L"[!] unwrapped, potentially fatal");
 }
 
 // --- the factory: the root every other object is reached through ----------
@@ -628,9 +609,9 @@ public:
         return hr;
     }
 
-    // The other two creation paths, which this host was measured never to take.
-    // They wrap nothing, so a swap chain made through one of them would not
-    // answer the gate - hence the [!].
+    // The other two creation paths, which this host never takes. They wrap
+    // nothing, so a swap chain made through one of them would not answer the
+    // gate - hence the [!].
     HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(
         IUnknown* device, HWND hwnd, const DXGI_SWAP_CHAIN_DESC1* desc,
         const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreenDesc,
@@ -655,10 +636,8 @@ public:
 
     // --- everything below only passes the call on ---------------------------
 
-    // Adapters are handed back as DXGI made them. Measured: the only output the
-    // host ever polls GetDesc1 on comes from GetContainingOutput, never from
-    // EnumOutputs, so wrapping an adapter bought nothing and cost the two
-    // interfaces D3D12 asks it for.
+    // Adapters are handed back as DXGI made them: the only output the host polls
+    // GetDesc1 on comes from GetContainingOutput, never from EnumOutputs.
     FORWARD_LOG(HRESULT, EnumAdapters, (UINT index, IDXGIAdapter** adapter),
                 (index, adapter),
                 (L"FactoryProxy::EnumAdapters(%u) (0x%08X)", index, result))

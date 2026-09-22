@@ -11,9 +11,9 @@ namespace
 using PfnBinkOpen = void*(__stdcall*)(const char* name, UINT32 flags);
 using PfnBinkClose = void(__stdcall*)(void* bink);
 
-// Identified from a log: the one BinkOpen whose "name" decoded to the KB2j Bink
-// 2 magic instead of a path had this bit set. With it, name points at the video
-// data, so it is not a string - it must not be read as one, let alone filtered.
+// Set on a BinkOpen whose "name" is the KB2j Bink 2 magic rather than a path:
+// name then points at the video data, so it is not a string - it must not be
+// read as one, let alone filtered. The value comes from logs, not a Bink header.
 constexpr UINT32 kBinkFromMemory = 0x04000000;
 
 PfnBinkOpen g_origOpen = nullptr;

@@ -22,7 +22,7 @@ you: standing rules, and things measured on the testing machine.
   elsewhere and a test then loads a stale binary from `build\`.
 - **Build Debug *and* Release** after touching logging, the gate interface or
   `dllmain.cpp`. `HW2HDRPATCH_LOGGING` follows `_DEBUG`, so each configuration
-  compiles code the other does not, and one of them once did not compile at all.
+  compiles code the other does not.
 - **Nothing with side effects in a `Log` argument, and no function takes a
   parameter that exists only to be logged.** At `0` the whole call site
   vanishes, arguments included — `Log(L"%s", Wrap<OutputProxy, ...>(output)
@@ -33,10 +33,9 @@ you: standing rules, and things measured on the testing machine.
 - **Release logs nothing; Debug logs every call, per frame included.** The
   Debug build exists to show which calls the host actually makes, so nothing in
   the diagnostics may summarise, deduplicate or suppress — a first-time-only
-  line hides the repeat that was the finding. Measured cost so far: 42 fps
-  through the gated movie with per-frame logging and 42 fps without, so at this
-  frame rate the per-line write does not show. A session is tens of thousands
-  of lines.
+  line hides the repeats, and the repeat counts are the data. Measured: 42 fps
+  through a gated movie either way, so at this frame rate the per-line write
+  does not show. A session is tens of thousands of lines.
 - **No timing.** No sleeps, no frame counts, no deadlines that anything is
   sequenced by, no polling heuristics. Hook the event. (A watchdog whose expiry
   only turns a hang into a diagnosable failure is fine and is not this.)
@@ -49,8 +48,7 @@ you: standing rules, and things measured on the testing machine.
 - **Never call `SetColorSpace1` unsolicited.** Answer what the host asks;
   initiate nothing.
 - **A checkbox is a claim that the answer varies.** Do not add an option for a
-  configuration that is known-bad, or for an environment nobody has. Every
-  injection option this project once had was removed for that reason.
+  configuration that is known-bad, or for an environment nobody has.
 - **No config file.** Config is one `|`-separated `key=value` string, and a
   default is a property of its own key, never of another key.
 - **The launcher runs non-elevated.** `ActivateApplication` refuses to start
@@ -66,54 +64,42 @@ you: standing rules, and things measured on the testing machine.
   argument, no knowledge of internals. That is the whole reason `HW2HDRPATCH`
   and the `DllMain` self-install exist; the argument route stays the default.
 - **`kBinkModule` is a constant, not a setting.** Halo Wars 2 ships exactly one
-  Bink DLL and the name was *discovered* from the running process — nobody
-  chose it. HW2 has no DLL plugins that touch Bink, which is also why watching
-  for late-loading modules was never a useful goal.
+  Bink DLL and the name comes from the running process — nobody chose it. HW2
+  has no DLL plugins that touch Bink, which is also why watching for
+  late-loading modules is not a useful goal.
 
 ---
 
 ## Measured on the testing machine
 
-### The working configuration is a pair
+### The working configuration is the descriptor lie alone
 
 | configuration | result |
 | --- | --- |
-| descriptor lie **and** swap-chain downgrade | **correct** |
-| descriptor lie alone | black — **superseded; see the next section** |
+| descriptor lie | **correct** |
 | swap-chain downgrade alone | desaturated — PQ Rec.2020 read as sRGB |
 | pinning the back-buffer format | hangs or crashes at launch |
 | blocking `SetHDRMetaData` | nothing; monitor metadata only |
 | blocking `CheckOverlayColorSpaceSupport` | nothing; this host never calls it |
 
-The host decides how to *encode* from `GetDesc1` and how to *label* the chain
-from `SetColorSpace1`, fed by different code. Lie to one and not the other and
-it is internally inconsistent.
-
-### Why "descriptor lie alone" measured black
-
-That row was measured under a build that pre-empted the host. The pair in the
-first row is still a correct configuration — it is no longer the minimal one.
-
-The vtable build drove the colour space itself, from `Present`
-(`>>> gate OPEN: chain now sRGB`, 63 ms after the request), on a premise
-written in its own source: *"The host does not call SetColorSpace1 again after
-startup, so the transition has to be driven from here."*
-
-**That premise is false for the wrapper build.** The host re-decides on its
-own, through its display-change handler, 62 ms after the gate opens:
+Left to itself, the host takes both its *encode* decision and its *label* from
+the descriptor. When the gate opens it re-decides through its display-change
+handler, 31 ms later:
 
 ```
-48.954  ==== gate OPEN ====
-49.016  host ResizeBuffers(2 buffers, 3440x1440, R8G8B8A8_UNORM, ...) [gate open]
-49.016  host SetColorSpace1(0 SDR) [gate open]
+52.688  ==== gate OPEN ====
+52.719  host ResizeBuffers(2 buffers, 3440x1440, R8G8B8A8_UNORM, flags 0x800) (0x00000000)
+52.719  SwapChainProxy::CheckColorSpaceSupport(0 SDR) [gate open]
 ```
 
-So the downgrade branch never executes: no `downgraded to sRGB` line appears in
-an HDR-mode or an SDR-mode session. The descriptor lie alone put the host in
-the configuration the first row calls correct. The `CheckColorSpaceSupport`
-override is not idle though — in SDR mode it zeroes HDR support once at
-swap-chain creation, and the host then skips the `SetColorSpace1(HDR)` it makes
-at that point in HDR mode.
+In HDR mode every `CheckColorSpaceSupport` is followed by the host's own
+`SetColorSpace1` for the same space — SDR inside the gate, HDR outside it — and
+the descriptor lie is the only thing the DLL changes. `SetColorSpace1` is a
+logging forward.
+
+`CheckColorSpaceSupport` is the other override. In SDR mode it zeroes HDR
+support once at swap-chain creation, and the host then skips the
+`SetColorSpace1(HDR)` it makes at that point in HDR mode.
 
 **Not pixel-verified.** The videos looked correct; SDR versus HDR output was
 not spot-checked. What is established is that the host reaches the right
@@ -126,14 +112,6 @@ configuration, not that the pixels leaving it were measured.
   it does not cache its encode decision at startup. That is the only reason a
   gate works at all; zero polls on some other host would mean the video-only
   fix is impossible there.
-- **The vtable build measured twice that rate**: 1414 polls over 706 frames,
-  same movie, same 42 fps. Neither counter double-counted (one
-  `InterlockedIncrement64` each, checked in the old source), and a vtable patch
-  writes the *shared* vtable, so its single install line is what you would see
-  with one caller or ten — the install log cannot settle it. What fits is a
-  second per-frame caller polling an `IDXGIOutput6` that never came through our
-  factory, which a global patch catches and a wrapper cannot. The decision path
-  still flips at the gate, so it does not appear to matter; nothing proves it.
 - It then **reallocates the back buffers**: `R8G8B8A8_UNORM` when the gate
   opens, `R10G10B10A2_UNORM` when it closes. The game keeps two whole render
   configurations and switches on the descriptor.
@@ -184,8 +162,7 @@ game's 2017 vintage.
 **A run that succeeds tells you nothing about whether a permission was needed;
 only a run on a path that lacks it does.** `(OI)(CI)` propagates to
 subdirectories created later and files copied in afterwards, so a "new folder"
-inside an already-granted tree proves nothing. This was deleted once on the
-strength of five such runs and had to come back. Keep the report line too: a
+inside an already-granted tree proves nothing. Keep the report line too: a
 remote `LoadLibraryW` returning NULL carries no error code back, so without it
 the failure is indistinguishable from a bad architecture or an AV quarantine.
 
@@ -206,8 +183,8 @@ output would need a plane value near 203.0 and the planes are 8-bit. No
 transfer function, paper-white setting, gamut conversion or dither closes a
 200x gap. That is why the fix is at the DXGI layer.
 
-Only `MB_*` was ever black. Front-end and splash videos (`FE*`,
-`Intro_Splash_*`) were always correct — same decoder, same geometry, different
+Only `MB_*` videos go black. Front-end and splash videos (`FE*`,
+`Intro_Splash_*`) are correct — same decoder, same geometry, different
 compositing path — which is why `GateFilter` defaults to `MB_`.
 
 ### `BinkOpen`'s first argument is not always a path
@@ -237,10 +214,9 @@ is ever rewritten.
 between videos; the margins around a pillarboxed video hold the previous
 video's final frame, normally black because cinematics fade out.*
 
-Confirmed four ways: a control build that loaded but did not gate showed it;
-skipping `Cine01` identified the stale pixels as `Cine01`'s own final frame;
-letting `Cine01` play to the end makes the next video's bars correct; and it
-reproduced unchanged on the stripped build. The pixels survived a fullscreen
+It happens with the DLL loaded but not gating; skipping `Cine01` identifies
+the stale pixels as `Cine01`'s own final frame; letting `Cine01` play to the
+end makes the next video's bars correct. The pixels survive a fullscreen
 `MB_M00_Prologue` and two whole swap-chain reallocations, so they are not in
 the back buffer — they are in a game-owned surface this DLL has no handle to.
 The letterbox is different: black in every configuration, so it is baked into
@@ -249,10 +225,8 @@ the video's own pixels.
 **Do nothing about it.** `GateFilter=MB_;Cine;IGC.` would gate the cinematics
 too, at the cost of HDR for those seconds. Untested and not needed.
 
-Worth keeping because it cost four builds: every "clean" video ever observed
-was either played before the gate first opened *or* stretched fullscreen with
-no pillarbox to be dirty, so there was never a clean pillarboxed video to
-compare against and the interceptor looked guilty by coincidence.
+Whether the bars are dirty depends on how the previous video ended, not on the
+gate, so a clean or dirty pillarbox is not evidence about the DLL either way.
 
 ---
 
@@ -261,16 +235,18 @@ compare against and the interceptor looked guilty by coincidence.
 - **Third-party overlay injectors.** Their global paths wait on a shared-memory
   handshake an AppContainer's separate object namespace cannot reach, and their
   hook-based injectors are blocked by `DisableExtensionPoints`, which every
-  AppContainer sets. Renaming one to `dxgi.dll` crashed the game.
+  AppContainer sets. Renaming one to `dxgi.dll` crashes the game.
 - **A proxy / wrapper `dxgi.dll`.** It must sit next to the executable, which
   lives in `C:\Program Files\WindowsApps\...` — owned by `TrustedInstaller`,
   not even enumerable by the user. `dxgi.dll` is not in `KnownDLLs` (checked,
   37 entries), so that is not the blocker; the ACL is. It would also modify the
   installed package, which this project does not do.
 - **Relabelling the swap chain alone** for the span of playback. Measured black.
+- **A swap-chain downgrade in `SetColorSpace1`.** It never fires: by the time
+  the gate is open the host has already asked for SDR itself.
 - **Converting Bink's planes**, in place or through shadow planes. In place it
   poisons Bink 2's prediction (frame N is motion-compensated from N-1); shadow
-  planes fixed that and still ran into the 200x arithmetic above.
+  planes avoid that and still hit the 200x arithmetic above.
 - **Touching `ResizeBuffers`.** Pinning the format crashes the game. Dropping an
   apparently redundant resize is also wrong — it is how a D3D12 app re-acquires
   back buffers it has released, so the call means more than its arguments.
@@ -283,22 +259,20 @@ compare against and the interceptor looked guilty by coincidence.
 - **`IPackageDebugSettings::EnableDebugging`'s `debuggerCommandLine`**, the
   packaged-app equivalent. **Ruled out by the user.** Noted only so it is not
   proposed again.
-- **Reintroducing the module watcher.** It covered one scenario — a plugin DLL,
-  loaded after install, statically importing Bink — which this game does not
-  have, and cost a thread for the life of the process plus a callback under the
-  loader lock on every module load.
-- **Wrapping the adapter.** `AdapterProxy` existed only so `EnumOutputs` would
-  hand back wrapped outputs, and the host never polls `GetDesc1` on those — the
-  1:1 count between `GetContainingOutput` and `GetDesc1` is the proof. It was
-  also the only object anything ever asked for an interface we do not answer.
-- **Unwrapping the adapter for `D3D12CreateDevice`.** Proposed on the theory
-  that D3D12 cannot use a proxy adapter. No citation was ever found for it, and
-  the logs settle it the other way: with the adapter wrapped, D3D12 asked for
-  its private interfaces, got the real object through the fall-through, created
-  the device and rendered 4600 frames.
-- **Any diagnostic that reports a call only the first time.** It was tried and
-  removed: the repeat *is* the finding — one poll per frame versus two is the
-  whole question above, and a first-time-only line cannot show it.
+- **A module watcher** for late-loading Bink importers. It covers one scenario —
+  a plugin DLL, loaded after install, statically importing Bink — which this
+  game does not have, and costs a thread for the life of the process plus a
+  callback under the loader lock on every module load.
+- **Wrapping the adapter.** Its only use would be wrapping `EnumOutputs`
+  results, and the host never polls `GetDesc1` on those — the 1:1 count between
+  `GetContainingOutput` and `GetDesc1` is the proof. The adapter is also the
+  only object anything asks for an interface we do not answer.
+- **Unwrapping an adapter for `D3D12CreateDevice`.** D3D12 accepts a proxy
+  adapter: with one wrapped, it asked for its private interfaces, got the real
+  object through the fall-through, created the device and rendered 4600 frames.
+- **Any diagnostic that reports a call only the first time.** The repeats are
+  the data — the per-frame 1:1:1 counts above cannot be read off first-time-only
+  lines.
 
 ---
 
@@ -309,7 +283,7 @@ compare against and the interceptor looked guilty by coincidence.
 - **A dialog unit is not the same number of pixels in the two templates** —
   `IDD_MAIN` is 9pt Segoe UI, `IDD_TESTING` is 8pt MS Shell Dlg. `LayoutView`
   measures the panel with `GetWindowRect` for that reason. Only `IDD_MAIN`'s
-  own size may be a constant; the panel's must not be re-added.
+  own size may be a constant; the panel's must be measured.
 - `IDC_STATIC` is `-1`, so `GetDlgItem(dialog, -1)` cannot pick one static out
   of several. Anything `LayoutView` shows or hides needs a real control id.
 - `StatusIcon.h` needs `NOMINMAX` before `windows.h`.
