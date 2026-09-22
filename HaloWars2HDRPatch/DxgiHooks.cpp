@@ -1,16 +1,20 @@
-// DxgiHooks.cpp - the pair of DXGI lies, and the gate that scopes them.
+// DxgiHooks.cpp - the DXGI descriptor lie, and the gate that scopes it.
 //
 // Invariant: with the gate shut every hook returns the original's result
-// untouched, and no hook initiates a DXGI call of its own.
+// untouched, and no hook initiates a DXGI call of its own. A patched slot is
+// shared with dxgi.dll's own internal calls; those are logged, never lied to.
 //
 // The install creates no factory - it redirects the host's imports of
-// CreateDXGIFactory/1/2 and patches vtables from the factory the host creates.
+// CreateDXGIFactory1/2 and patches vtables from the factory the host creates.
 // Creating one here would run inside the launcher's suspend window, where it
 // can block on a lock a frozen thread holds.
 
 #include "Hooks.h"
 
 #include <atomic>
+#include <cstdio>
+#include <intrin.h>
+#include <psapi.h>
 
 namespace hw2hdr
 {
@@ -32,12 +36,16 @@ constexpr size_t kFactoryForComposition = 24;
 // IDXGIOutput6 27 GetDesc1.
 constexpr size_t kOutputGetDesc1 = 27;
 
+// IDXGIDeviceSubObject 7, IDXGISwapChain 8 Present, 13 ResizeBuffers,
+// 15 GetContainingOutput, IDXGISwapChain1 18-28, IDXGISwapChain2 29-35,
 // IDXGISwapChain3 36 GetCurrentBackBufferIndex, 37 CheckColorSpaceSupport,
 // 38 SetColorSpace1.
+constexpr size_t kSwapChainPresent = 8;
+constexpr size_t kSwapChainResizeBuffers = 13;
+constexpr size_t kSwapChainGetContainingOutput = 15;
 constexpr size_t kSwapChainCheckColorSpaceSupport = 37;
 constexpr size_t kSwapChainSetColorSpace1 = 38;
 
-// CreateDXGIFactory and CreateDXGIFactory1 share a signature.
 using PfnCreateDXGIFactory = HRESULT(WINAPI*)(REFIID, void**);
 using PfnCreateDXGIFactory2 = HRESULT(WINAPI*)(UINT, REFIID, void**);
 
@@ -60,10 +68,7 @@ using PfnForComposition =
                                 IDXGISwapChain1**);
 using PfnCheckColorSpaceSupport =
     HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, DXGI_COLOR_SPACE_TYPE, UINT*);
-using PfnSetColorSpace1 =
-    HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, DXGI_COLOR_SPACE_TYPE);
 
-PfnCreateDXGIFactory g_origCreateFactory = nullptr;
 PfnCreateDXGIFactory g_origCreateFactory1 = nullptr;
 PfnCreateDXGIFactory2 g_origCreateFactory2 = nullptr;
 
@@ -73,16 +78,27 @@ PfnForHwnd g_origForHwnd = nullptr;
 PfnForCoreWindow g_origForCoreWindow = nullptr;
 PfnForComposition g_origForComposition = nullptr;
 PfnCheckColorSpaceSupport g_origCheckColorSpace = nullptr;
-PfnSetColorSpace1 g_origSetColorSpace1 = nullptr;
 
 std::atomic<bool> g_gateOpen(false);
 std::atomic<bool> g_factoryPatched(false);
 std::atomic<bool> g_outputPatched(false);
 SRWLOCK g_patchLock = SRWLOCK_INIT;
 
+// dxgi.dll's image, pinned at install.
+const BYTE* g_dxgiBegin = nullptr;
+const BYTE* g_dxgiEnd = nullptr;
+
 bool IsGateOpen()
 {
     return g_gateOpen;
+}
+
+// DXGI calls GetDesc1 on every output it creates, through the same shared
+// slot. Its own calls are left alone unless one is shown to need the lie.
+bool CalledFromDxgi(const void* returnAddress)
+{
+    const BYTE* address = static_cast<const BYTE*>(returnAddress);
+    return address >= g_dxgiBegin && address < g_dxgiEnd;
 }
 
 
@@ -182,12 +198,174 @@ PatchOutcome PatchSlot(void* object, size_t index, void* hook, void** original)
     return outcome;
 }
 
-// --- the three hooks -------------------------------------------------------
+// --- diagnostics ----------------------------------------------------------
+// Compiles out at HW2HDRPATCH_LOGGING 0, call sites and arguments both, so
+// nothing handed to one of these may have a side effect. Every call is logged
+// every time, per frame included: nothing here may summarise or suppress.
+//
+// A patched slot is shared by every object of its class in the process, so
+// these hooks see callers a wrapper handed out by our factory never would.
+// The object pointer and the calling module are what tell them apart.
+
+#if HW2HDRPATCH_LOGGING
+
+const wchar_t* IidName(REFIID riid)
+{
+    if (riid == __uuidof(IUnknown))      return L"IUnknown";
+    if (riid == __uuidof(IDXGIFactory))  return L"IDXGIFactory";
+    if (riid == __uuidof(IDXGIFactory1)) return L"IDXGIFactory1";
+    if (riid == __uuidof(IDXGIFactory2)) return L"IDXGIFactory2";
+    if (riid == __uuidof(IDXGIFactory3)) return L"IDXGIFactory3";
+    if (riid == __uuidof(IDXGIFactory4)) return L"IDXGIFactory4";
+    if (riid == __uuidof(IDXGIFactory5)) return L"IDXGIFactory5";
+    if (riid == __uuidof(IDXGIFactory6)) return L"IDXGIFactory6";
+    if (riid == __uuidof(IDXGIFactory7)) return L"IDXGIFactory7";
+    return L"(unrecognised)";
+}
+
+const wchar_t* FormatName(DXGI_FORMAT format)
+{
+    switch (format)
+    {
+        case DXGI_FORMAT_UNKNOWN:            return L"UNKNOWN";
+        case DXGI_FORMAT_R16G16B16A16_FLOAT: return L"R16G16B16A16_FLOAT";
+        case DXGI_FORMAT_R10G10B10A2_UNORM:  return L"R10G10B10A2_UNORM";
+        case DXGI_FORMAT_R8G8B8A8_UNORM:     return L"R8G8B8A8_UNORM";
+        case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:return L"R8G8B8A8_UNORM_SRGB";
+        case DXGI_FORMAT_B8G8R8A8_UNORM:     return L"B8G8R8A8_UNORM";
+        case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:return L"B8G8R8A8_UNORM_SRGB";
+        default:                             return L"other";
+    }
+}
+
+// The result comes first: on a failure the descriptor fields that follow are
+// whatever was already in the caller's struct.
+void LogSwapChainDesc(const wchar_t* who, HRESULT hr,
+                      const DXGI_SWAP_CHAIN_DESC1* desc)
+{
+    if (desc == nullptr)
+    {
+        Log(L"%s (0x%08X), no descriptor", who, hr);
+        return;
+    }
+
+    Log(L"%s (0x%08X): %ux%u, %s, %u buffers, flags 0x%X, swap effect %d, "
+        L"alpha %d, scaling %d",
+        who, hr, desc->Width, desc->Height, FormatName(desc->Format),
+        desc->BufferCount, desc->Flags, static_cast<int>(desc->SwapEffect),
+        static_cast<int>(desc->AlphaMode), static_cast<int>(desc->Scaling));
+}
+
+// module+offset rather than a raw address, so one caller reads the same in
+// every session despite ASLR.
+struct Location
+{
+    wchar_t text[MAX_PATH + 32];
+};
+
+Location Locate(const void* address)
+{
+    Location location = {};
+    HMODULE module = nullptr;
+    wchar_t path[MAX_PATH] = {};
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                                | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(address), &module)
+        || GetModuleFileNameW(module, path, MAX_PATH) == 0)
+    {
+        _snwprintf_s(location.text, _countof(location.text), _TRUNCATE, L"%p",
+                     address);
+        return location;
+    }
+
+    const wchar_t* slash = wcsrchr(path, L'\\');
+    _snwprintf_s(location.text, _countof(location.text), _TRUNCATE, L"%s+0x%zX",
+                 slash != nullptr ? slash + 1 : path,
+                 static_cast<size_t>(static_cast<const BYTE*>(address)
+                                     - reinterpret_cast<const BYTE*>(module)));
+    return location;
+}
+
+using PfnPresent = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
+using PfnResizeBuffers =
+    HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
+using PfnGetContainingOutput =
+    HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, IDXGIOutput**);
+using PfnSetColorSpace1 =
+    HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, DXGI_COLOR_SPACE_TYPE);
+
+PfnPresent g_origPresent = nullptr;
+PfnResizeBuffers g_origResizeBuffers = nullptr;
+PfnGetContainingOutput g_origGetContainingOutput = nullptr;
+PfnSetColorSpace1 g_origSetColorSpace1 = nullptr;
+
+// The per-frame reference the GetDesc1 polls are counted against.
+HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* self, UINT syncInterval,
+                                      UINT flags)
+{
+    const HRESULT hr = g_origPresent(self, syncInterval, flags);
+    Log(L"Present(swap chain %p, sync %u, flags 0x%X) (0x%08X)", self, syncInterval,
+        flags, hr);
+    LogFlush();
+    return hr;
+}
+
+// Measured to follow every gate edge: R8G8B8A8_UNORM when it opens,
+// R10G10B10A2_UNORM when it shuts.
+HRESULT STDMETHODCALLTYPE HookResizeBuffers(IDXGISwapChain* self, UINT bufferCount,
+                                            UINT width, UINT height,
+                                            DXGI_FORMAT newFormat,
+                                            UINT swapChainFlags)
+{
+    const HRESULT hr = g_origResizeBuffers(self, bufferCount, width, height,
+                                           newFormat, swapChainFlags);
+    Log(L"host ResizeBuffers(%u buffers, %ux%u, %s, flags 0x%X) (0x%08X)",
+        bufferCount, width, height, FormatName(newFormat), swapChainFlags, hr);
+    return hr;
+}
+
+// The output handed out here is what the host's GetDesc1 polls should name.
+HRESULT STDMETHODCALLTYPE HookGetContainingOutput(IDXGISwapChain* self,
+                                                  IDXGIOutput** output)
+{
+    const HRESULT hr = g_origGetContainingOutput(self, output);
+    Log(L"GetContainingOutput(swap chain %p) from %s -> output %p (0x%08X)", self,
+        Locate(_ReturnAddress()).text, output != nullptr ? *output : nullptr, hr);
+    return hr;
+}
+
+// Whether the host re-asserts HDR after a close is only visible here.
+HRESULT STDMETHODCALLTYPE HookSetColorSpace1(IDXGISwapChain3* self,
+                                             DXGI_COLOR_SPACE_TYPE colorSpace)
+{
+    const HRESULT hr = g_origSetColorSpace1(self, colorSpace);
+    Log(L"host SetColorSpace1(%d %s) (0x%08X)", static_cast<int>(colorSpace),
+        IsHdr(colorSpace) ? L"HDR" : L"SDR", hr);
+    return hr;
+}
+
+#else  // !HW2HDRPATCH_LOGGING
+
+#define LogSwapChainDesc(...) ((void)0)
+
+#endif  // HW2HDRPATCH_LOGGING
+
+// --- the two hooks ---------------------------------------------------------
 
 HRESULT STDMETHODCALLTYPE HookGetDesc1(IDXGIOutput6* self, DXGI_OUTPUT_DESC1* desc)
 {
     const HRESULT hr = g_origGetDesc1(self, desc);
-    if (FAILED(hr) || desc == nullptr || !IsGateOpen())
+
+    // One read, so the line cannot say "shut" about a call that then took the
+    // open path.
+    const bool gated = IsGateOpen();
+    const void* const caller = _ReturnAddress();
+    const bool fromDxgi = CalledFromDxgi(caller);
+    Log(L"GetDesc1(output %p) from %s, thread %lu (0x%08X) [gate %s]", self,
+        Locate(caller).text, GetCurrentThreadId(), hr,
+        !gated ? L"shut" : fromDxgi ? L"open, DXGI's own call untouched" : L"open");
+
+    if (FAILED(hr) || desc == nullptr || !gated || fromDxgi)
     {
         return hr;
     }
@@ -216,34 +394,21 @@ HRESULT STDMETHODCALLTYPE HookCheckColorSpaceSupport(IDXGISwapChain3* self,
                                                      UINT* support)
 {
     const HRESULT hr = g_origCheckColorSpace(self, colorSpace, support);
-    if (SUCCEEDED(hr) && support != nullptr && IsGateOpen() && IsHdr(colorSpace))
+
+    const bool gated = IsGateOpen();
+    const void* const caller = _ReturnAddress();
+    const bool fromDxgi = CalledFromDxgi(caller);
+    Log(L"CheckColorSpaceSupport(%d %s) from %s (0x%08X) [gate %s]",
+        static_cast<int>(colorSpace), IsHdr(colorSpace) ? L"HDR" : L"SDR",
+        Locate(caller).text, hr,
+        !gated ? L"shut" : fromDxgi ? L"open, DXGI's own call untouched" : L"open");
+
+    if (SUCCEEDED(hr) && support != nullptr && gated && !fromDxgi
+        && IsHdr(colorSpace))
     {
         *support = 0;
     }
     return hr;
-}
-
-HRESULT STDMETHODCALLTYPE HookSetColorSpace1(IDXGISwapChain3* self,
-                                             DXGI_COLOR_SPACE_TYPE colorSpace)
-{
-    const bool gated = IsGateOpen();
-
-    // Whether the host re-asserts its colour space after a close decides whether
-    // HDR comes back, and this is the only place that is visible.
-    Log(L"host SetColorSpace1(%d %s) [gate %s]", static_cast<int>(colorSpace),
-        IsHdr(colorSpace) ? L"HDR" : L"SDR", gated ? L"open" : L"shut");
-
-    if (gated && IsHdr(colorSpace))
-    {
-        const HRESULT hr =
-            g_origSetColorSpace1(self, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
-        Log(L"    downgraded to sRGB (0x%08X)", hr);
-
-        // The host likely does not handle an error here.
-        return SUCCEEDED(hr) ? hr : S_OK;
-    }
-
-    return g_origSetColorSpace1(self, colorSpace);
 }
 
 // --- reaching the swap chain vtable ----------------------------------------
@@ -383,33 +548,28 @@ void AdoptHostFactory(IUnknown* unknown)
     }
 }
 
-HRESULT WINAPI HookCreateDXGIFactory(REFIID riid, void** out)
-{
-    const HRESULT hr = g_origCreateFactory(riid, out);
-    if (SUCCEEDED(hr) && out != nullptr)
-    {
-        AdoptHostFactory(static_cast<IUnknown*>(*out));
-    }
-    return hr;
-}
-
 HRESULT WINAPI HookCreateDXGIFactory1(REFIID riid, void** out)
 {
     const HRESULT hr = g_origCreateFactory1(riid, out);
+    Log(L"host called CreateDXGIFactory1(%s) (0x%08X)", IidName(riid), hr);
     if (SUCCEEDED(hr) && out != nullptr)
     {
         AdoptHostFactory(static_cast<IUnknown*>(*out));
     }
+    LogFlush();
     return hr;
 }
 
 HRESULT WINAPI HookCreateDXGIFactory2(UINT flags, REFIID riid, void** out)
 {
     const HRESULT hr = g_origCreateFactory2(flags, riid, out);
+    Log(L"host called CreateDXGIFactory2(flags 0x%X, %s) (0x%08X)", flags,
+        IidName(riid), hr);
     if (SUCCEEDED(hr) && out != nullptr)
     {
         AdoptHostFactory(static_cast<IUnknown*>(*out));
     }
+    LogFlush();
     return hr;
 }
 
@@ -430,11 +590,32 @@ void HookSwapChain(IDXGISwapChain1* swapChain)
         Log(L"    IDXGISwapChain3::CheckColorSpaceSupport (slot %zu): %s",
             kSwapChainCheckColorSpaceSupport, Describe(checkColorSpace));
 
-        [[maybe_unused]] const PatchOutcome setColorSpace =
+#if HW2HDRPATCH_LOGGING
+        // Diagnostics only: they forward and log, nothing more.
+        const PatchOutcome setColorSpace =
             PatchSlot(sc3, kSwapChainSetColorSpace1, &HookSetColorSpace1,
                       reinterpret_cast<void**>(&g_origSetColorSpace1));
         Log(L"    IDXGISwapChain3::SetColorSpace1 (slot %zu): %s",
             kSwapChainSetColorSpace1, Describe(setColorSpace));
+
+        const PatchOutcome present =
+            PatchSlot(sc3, kSwapChainPresent, &HookPresent,
+                      reinterpret_cast<void**>(&g_origPresent));
+        Log(L"    IDXGISwapChain::Present (slot %zu): %s", kSwapChainPresent,
+            Describe(present));
+
+        const PatchOutcome resizeBuffers =
+            PatchSlot(sc3, kSwapChainResizeBuffers, &HookResizeBuffers,
+                      reinterpret_cast<void**>(&g_origResizeBuffers));
+        Log(L"    IDXGISwapChain::ResizeBuffers (slot %zu): %s",
+            kSwapChainResizeBuffers, Describe(resizeBuffers));
+
+        const PatchOutcome getContainingOutput =
+            PatchSlot(sc3, kSwapChainGetContainingOutput, &HookGetContainingOutput,
+                      reinterpret_cast<void**>(&g_origGetContainingOutput));
+        Log(L"    IDXGISwapChain::GetContainingOutput (slot %zu): %s",
+            kSwapChainGetContainingOutput, Describe(getContainingOutput));
+#endif
 
         sc3->Release();
     }
@@ -456,6 +637,9 @@ HRESULT STDMETHODCALLTYPE HookCreateSwapChain(IDXGIFactory* self, IUnknown* devi
                                               IDXGISwapChain** out)
 {
     const HRESULT hr = g_origCreateSwapChain(self, device, desc, out);
+    Log(L"host CreateSwapChain (0x%08X): %s, %u buffers, flags 0x%X", hr,
+        desc != nullptr ? FormatName(desc->BufferDesc.Format) : L"(no descriptor)",
+        desc != nullptr ? desc->BufferCount : 0, desc != nullptr ? desc->Flags : 0);
     if (SUCCEEDED(hr) && out != nullptr && *out != nullptr)
     {
         IDXGISwapChain1* sc1 = nullptr;
@@ -476,6 +660,7 @@ HRESULT STDMETHODCALLTYPE HookForHwnd(IDXGIFactory2* self, IUnknown* device,
 {
     const HRESULT hr =
         g_origForHwnd(self, device, hwnd, desc, fullscreen, restrictTo, out);
+    LogSwapChainDesc(L"host CreateSwapChainForHwnd", hr, desc);
     if (SUCCEEDED(hr) && out != nullptr)
     {
         HookSwapChain(*out);
@@ -491,6 +676,7 @@ HRESULT STDMETHODCALLTYPE HookForCoreWindow(IDXGIFactory2* self, IUnknown* devic
 {
     const HRESULT hr =
         g_origForCoreWindow(self, device, window, desc, restrictTo, out);
+    LogSwapChainDesc(L"host CreateSwapChainForCoreWindow", hr, desc);
     if (SUCCEEDED(hr) && out != nullptr)
     {
         HookSwapChain(*out);
@@ -504,6 +690,7 @@ HRESULT STDMETHODCALLTYPE HookForComposition(IDXGIFactory2* self, IUnknown* devi
                                              IDXGISwapChain1** out)
 {
     const HRESULT hr = g_origForComposition(self, device, desc, restrictTo, out);
+    LogSwapChainDesc(L"host CreateSwapChainForComposition", hr, desc);
     if (SUCCEEDED(hr) && out != nullptr)
     {
         HookSwapChain(*out);
@@ -515,12 +702,16 @@ HRESULT STDMETHODCALLTYPE HookForComposition(IDXGIFactory2* self, IUnknown* devi
 
 bool OpenGate()
 {
-    return !g_gateOpen.exchange(true);
+    const bool moved = !g_gateOpen.exchange(true);
+    Log(L"==== gate %s ====", moved ? L"OPEN" : L"already open");
+    return moved;
 }
 
 bool CloseGate()
 {
-    return g_gateOpen.exchange(false);
+    const bool moved = g_gateOpen.exchange(false);
+    Log(L"==== gate %s ====", moved ? L"SHUT" : L"already shut");
+    return moved;
 }
 
 bool InstallDxgiHooks()
@@ -535,22 +726,30 @@ bool InstallDxgiHooks()
         return false;
     }
 
-    g_origCreateFactory = reinterpret_cast<PfnCreateDXGIFactory>(
-        reinterpret_cast<void*>(GetProcAddress(dxgi, "CreateDXGIFactory")));
+    MODULEINFO image = {};
+    if (!GetModuleInformation(GetCurrentProcess(), dxgi, &image, sizeof(image)))
+    {
+        Log(L"[!] dxgi.dll's image range is unknown (%lu), so its own calls could "
+            L"not be told from the host's.", GetLastError());
+        return false;
+    }
+    g_dxgiBegin = static_cast<const BYTE*>(image.lpBaseOfDll);
+    g_dxgiEnd = g_dxgiBegin + image.SizeOfImage;
+
     g_origCreateFactory1 = reinterpret_cast<PfnCreateDXGIFactory>(
         reinterpret_cast<void*>(GetProcAddress(dxgi, "CreateDXGIFactory1")));
     g_origCreateFactory2 = reinterpret_cast<PfnCreateDXGIFactory2>(
         reinterpret_cast<void*>(GetProcAddress(dxgi, "CreateDXGIFactory2")));
 
-    if (g_origCreateFactory == nullptr || g_origCreateFactory1 == nullptr
-        || g_origCreateFactory2 == nullptr)
+    if (g_origCreateFactory1 == nullptr || g_origCreateFactory2 == nullptr)
     {
         Log(L"[!] dxgi.dll did not export the expected factory entry points.");
         return false;
     }
 
+    // CreateDXGIFactory is not in this host's import table; measured, the two
+    // below are the only ones it calls.
     const ImportPatch patches[] = {
-        {"CreateDXGIFactory", &HookCreateDXGIFactory},
         {"CreateDXGIFactory1", &HookCreateDXGIFactory1},
         {"CreateDXGIFactory2", &HookCreateDXGIFactory2},
     };

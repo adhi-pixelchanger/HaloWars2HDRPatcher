@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cwchar>
 #include <vector>
+#include <fstream>
 
 namespace hw2hdr
 {
@@ -30,7 +31,6 @@ Config g_config;
 namespace
 {
 
-std::wstring g_logPath;
 ULONGLONG g_startTick = 0;
 
 const wchar_t* ModeName(Mode mode)
@@ -144,10 +144,11 @@ void LoadConfig(const wchar_t* args)
 #if HW2HDRPATCH_LOGGING
 
 SRWLOCK g_logLock = SRWLOCK_INIT;
+std::unique_ptr<std::wofstream> g_logFile;
 
 // The compile-time switch removes this whole block and every call site.
-void __fastcall LogNoop(const wchar_t* /*format*/, ...) {}
-void __fastcall LogImpl(const wchar_t* format, ...);
+void LogNoop(const wchar_t* /*format*/, ...) {}
+void LogImpl(const wchar_t* format, ...);
 
 PfnLog Log = LogNoop;
 
@@ -179,20 +180,11 @@ void InitLog()
             GetLastError());
         return;
     }
-    g_logPath = std::wstring(temp) + L"HaloWars2HDRPatch.log";
-
-    HANDLE file = CreateFileW(g_logPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
-                              nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file != INVALID_HANDLE_VALUE)
-    {
-        const unsigned char bom[] = {0xFF, 0xFE};
-        DWORD written = 0;
-        WriteFile(file, bom, sizeof(bom), &written, nullptr);
-        CloseHandle(file);
-    }
+    const auto logPath = std::wstring(temp) + L"HaloWars2HDRPatch.log";
+    g_logFile.reset(new std::wofstream(logPath));
 }
 
-void __fastcall LogImpl(const wchar_t* format, ...)
+void LogImpl(const wchar_t* format, ...)
 {
     AutoSRWLockExclusive logLock(g_logLock);
 
@@ -209,22 +201,19 @@ void __fastcall LogImpl(const wchar_t* format, ...)
 
     OutputDebugStringW(line);
 
-    if (g_logPath.empty())
+    if (g_logFile && g_logFile->is_open())
     {
-        return;
+        *g_logFile << line;
     }
+}
 
-    HANDLE file = CreateFileW(g_logPath.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ,
-                              nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE)
+void LogFlush()
+{
+    AutoSRWLockExclusive logLock(g_logLock);
+    if (g_logFile && g_logFile->is_open())
     {
-        return;
+        g_logFile->flush();
     }
-
-    DWORD written = 0;
-    WriteFile(file, line, static_cast<DWORD>(wcslen(line) * sizeof(wchar_t)), &written,
-              nullptr);
-    CloseHandle(file);
 }
 
 #else  // !HW2HDRPATCH_LOGGING

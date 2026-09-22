@@ -20,16 +20,26 @@ you: standing rules, and things measured on the testing machine.
 - **Build the `.sln`, never a `.vcxproj` directly.** A direct project build
   resolves `$(SolutionDir)` to the project folder, so the output lands
   elsewhere and a test then loads a stale binary from `build\`.
-- **Build the DLL at `HW2HDRPATCH_LOGGING` 0 *and* 1** after touching logging,
-  the gate interface or `dllmain.cpp`. Each setting compiles code the other
-  does not, and one of them once did not compile at all.
+- **Build Debug *and* Release** after touching logging, the gate interface or
+  `dllmain.cpp`. `HW2HDRPATCH_LOGGING` follows `_DEBUG`, so each configuration
+  compiles code the other does not.
 - **Nothing with side effects in a `Log` argument, and no function takes a
   parameter that exists only to be logged.** At `0` the whole call site
   vanishes, arguments included — `Log(L"%s", Describe(PatchSlot(...)))` would
   silently stop patching. Correctness rules, not style; building at `0` is how
   you find violations of the second one (C4100/C4189).
-- **Nothing logs per frame.** Every line is a `CreateFile`/`WriteFile`/
-  `CloseHandle` on one of the host's own threads.
+- **Release logs nothing; Debug logs every call, per frame included.** The
+  Debug build exists to show which calls the host actually makes, so nothing in
+  the diagnostics may summarise, deduplicate or suppress — a first-time-only
+  line hides the repeats, and the repeat counts are the data. Debug also
+  patches `Present`, `ResizeBuffers`, `GetContainingOutput` and
+  `SetColorSpace1`, which only forward and log. Measured in the wrapper build:
+  42 fps through a gated movie either way. A session is tens of thousands of
+  lines.
+- **Lie to the host, never to DXGI.** A patched vtable slot is shared with
+  dxgi.dll's own internal calls. Those are logged but answered truthfully, and
+  stay that way unless a measurement shows one needs the lie. Nothing broke
+  when they were lied to, but that was luck, not design.
 - **No timing.** No sleeps, no frame counts, no deadlines that anything is
   sequenced by, no polling heuristics. Hook the event. (A watchdog whose expiry
   only turns a hang into a diagnosable failure is fine and is not this.)
@@ -67,27 +77,65 @@ you: standing rules, and things measured on the testing machine.
 
 ## Measured on the testing machine
 
-### The working configuration is a pair
+### The working configuration is the descriptor lie alone
 
 | configuration | result |
 | --- | --- |
-| descriptor lie **and** swap-chain downgrade | **correct** |
-| descriptor lie alone | black — SDR pixels in a chain labelled HDR10 |
+| descriptor lie | **correct** |
 | swap-chain downgrade alone | desaturated — PQ Rec.2020 read as sRGB |
 | pinning the back-buffer format | hangs or crashes at launch |
 | blocking `SetHDRMetaData` | nothing; monitor metadata only |
 | blocking `CheckOverlayColorSpaceSupport` | nothing; this host never calls it |
 
-The host decides how to *encode* from `GetDesc1` and how to *label* the chain
-from `SetColorSpace1`, fed by different code. Lie to one and not the other and
-it is internally inconsistent.
+Left to itself, the host takes both its *encode* decision and its *label* from
+the descriptor. When the gate opens it re-decides through its display-change
+handler: `ResizeBuffers` to `R8G8B8A8_UNORM`, then `CheckColorSpaceSupport` and
+its own `SetColorSpace1(SDR)`. That took 31 ms in the wrapper build and 46 ms
+in the vtable build:
+
+```
+77.891  ==== gate OPEN ====
+77.937  host ResizeBuffers(2 buffers, 3440x1440, R8G8B8A8_UNORM, flags 0x800) (0x00000000)
+77.937  host CheckColorSpaceSupport(0 SDR) (0x00000000) [gate open]
+77.937  host SetColorSpace1(0 SDR) (0x00000000) [gate open]
+```
+
+The `SetColorSpace1` downgrade was removed: it never fired in either build, in
+HDR or SDR mode, because by the time the gate is open the host has already
+asked for SDR itself. An older vtable build measured the lie alone as black,
+but that build drove `SetColorSpace1` itself from `Present` and so pre-empted
+the host.
+
+`CheckColorSpaceSupport` matters in SDR mode: it zeroes HDR support once at
+swap-chain creation, and the host then skips the `SetColorSpace1(HDR)` it
+makes at that point in HDR mode.
+
+**Not pixel-verified.** The videos looked correct; SDR versus HDR output was
+not spot-checked.
 
 ### How the host answers the gate
 
-- It polls `GetDesc1` about **twice per presented frame** — 1414 polls over 706
-  frames — so it does not cache its encode decision at startup. That is the
-  only reason a gate works at all; zero polls on some other host would mean the
-  video-only fix is impossible there.
+- It polls `GetDesc1` **once per presented frame**, so it does not cache its
+  encode decision at startup. That is the only reason a gate works at all; zero
+  polls on some other host would mean the video-only fix is impossible there.
+- **The vtable slot sees twice that, and the second caller is DXGI.** An older
+  vtable build counted 1414 polls over 706 frames. The Debug log splits them
+  between two callers:
+
+  | | HDR session | SDR session |
+  | --- | --- | --- |
+  | host `GetContainingOutput` (`exe+0x81837`) | 8533 | 8257 |
+  | host `GetDesc1` (`exe+0x81873`) | 8533 | 8257 |
+  | DXGI's own `GetDesc1` (`dxgi.dll+0x437F8`) | 8542 | 8262 |
+  | `Present` | 8557 | 8281 |
+
+  DXGI calls `GetDesc1` on every output object it creates, on the same thread,
+  before handing the object back. The host re-acquires its output every frame,
+  so each `GetContainingOutput` carries one DXGI call on the output it then
+  returns — 8533 of 8533 in HDR, 8257 of 8257 in SDR. The rest are one at
+  swap-chain creation and two per display-change factory rebuild. A wrapper
+  never sees these, because DXGI calls its own real object; that is the whole
+  difference between the builds.
 - It then **reallocates the back buffers**: `R8G8B8A8_UNORM` when the gate
   opens, `R10G10B10A2_UNORM` when it closes. The game keeps two whole render
   configurations and switches on the descriptor.
@@ -96,6 +144,27 @@ it is internally inconsistent.
 - Its own startup resize varies between runs (`3440x1360` → `3440x1440`, or
   not). That tracks whether the window ended up borderless. Do not read meaning
   into its absence.
+
+### The host's whole path through DXGI
+
+Measured from a Debug session of the wrapper build (`qi`). It saw every call on
+objects reached through the host's factories, so this is the host's own path.
+DXGI's internal `GetDesc1` calls, above, are not part of it.
+
+- `CreateDXGIFactory1` (eight times a session) and `CreateDXGIFactory2` (once).
+  Plain `CreateDXGIFactory` is **not in its import table** — the patch reports
+  two slots, not three. It asks for `IDXGIFactory`, `1`, `4`, `5`.
+- One swap chain, always `CreateSwapChainForCoreWindow`: `3440x1360`,
+  `R10G10B10A2_UNORM`, 2 buffers, flags `0x800`, flip-discard.
+- **Per frame, exactly this: `GetContainingOutput` → QI `IDXGIOutput6` →
+  `GetDesc1` → `GetCurrentBackBufferIndex` → `Present`.** The first three are
+  1:1:1 with each other and with `Present`. It re-acquires the output every
+  frame instead of caching it, and it never polls `GetDesc1` on an output that
+  came from `EnumOutputs`.
+- On every display change it **builds a whole new factory**:
+  `CreateDXGIFactory1` → `EnumAdapters(0)` → `EnumOutputs(0)` → `GetDesc` →
+  `ResizeBuffers`. The import patch therefore has to stay live for the session,
+  not just for startup.
 
 ### The AppContainer ACE is required
 
@@ -132,6 +201,27 @@ transfer function, paper-white setting, gamut conversion or dither closes a
 Only `MB_*` was ever black. Front-end and splash videos (`FE*`,
 `Intro_Splash_*`) were always correct — same decoder, same geometry, different
 compositing path — which is why `GateFilter` defaults to `MB_`.
+
+### `BinkOpen`'s first argument is not always a path
+
+One movie a session is opened from memory. Its `name` points at the video data,
+not at a filename, and reading it as a string is a scan for a NUL through a
+binary buffer:
+
+```
+[  124.859] BinkOpen("KB2jlñï", flags=0x04104000)
+```
+
+`KB2j` is the Bink 2 file magic. Every other call in that session had
+`flags=0x01104000` and a real path, so the flag is what distinguishes them:
+`kBinkFromMemory = 0x04000000`, **derived from this log line, not from a Bink
+header** — the value is evidence, the name is a guess. `HookBinkOpen` tests it
+and short-circuits, so `MovieMatchesFilter` never sees the pointer. Such a
+movie is never gated, which is correct: there is no name to match, and the
+gated ones all arrive as real paths.
+
+Nothing in the source hints at this. Restore the check if `MovieMatchesFilter`
+is ever rewritten.
 
 ### Dirty pillarboxes are a game bug
 
@@ -170,6 +260,9 @@ compare against and the interceptor looked guilty by coincidence.
   37 entries), so that is not the blocker; the ACL is. It would also modify the
   installed package, which this project does not do.
 - **Relabelling the swap chain alone** for the span of playback. Measured black.
+- **A swap-chain downgrade in `SetColorSpace1`.** It never fires, in either
+  build: by the time the gate is open the host has already asked for SDR
+  itself.
 - **Converting Bink's planes**, in place or through shadow planes. In place it
   poisons Bink 2's prediction (frame N is motion-compensated from N-1); shadow
   planes fixed that and still ran into the 200x arithmetic above.
@@ -189,6 +282,9 @@ compare against and the interceptor looked guilty by coincidence.
   loaded after install, statically importing Bink — which this game does not
   have, and cost a thread for the life of the process plus a callback under the
   loader lock on every module load.
+- **Any diagnostic that reports a call only the first time.** It was tried and
+  removed: the repeat *is* the finding — DXGI's `GetDesc1` pairing one-to-one
+  with `GetContainingOutput` above could not be read off first-time-only lines.
 
 ---
 

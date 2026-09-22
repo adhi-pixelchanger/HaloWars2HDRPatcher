@@ -18,6 +18,12 @@ enum class Mode
     Hdr,
 };
 
+#if defined(_DEBUG)
+#define _DEBUG_BOOL true
+#else
+#define _DEBUG_BOOL false
+#endif
+
 struct Config
 {
     Mode mode = Mode::Hdr;
@@ -25,15 +31,13 @@ struct Config
     // Semicolon-separated substrings, case insensitive; empty gates every movie.
     std::wstring gateFilter = L"MB_";
 
-    bool log = false;
-    bool logToFile = false;   // needs log
+    bool log = _DEBUG_BOOL;
+    bool logToFile = _DEBUG_BOOL;   // needs log
 };
 
 constexpr const wchar_t* kBinkModule = L"bink2winrt_x64.uni10.dll";
 
-// The environment variable any injector can set instead of calling the export
-// with an argument. Same key=value tokens, separated by '|' because an
-// environment variable cannot hold a NUL.
+// Environment variable in an alternate injector is used
 #define HW2HDRPATCH_ENV_NAME L"HW2HDRPATCH"
 constexpr const wchar_t* kEnvVarName = HW2HDRPATCH_ENV_NAME;
 
@@ -51,23 +55,19 @@ bool InstallHooks();
 // from DllMain: it reads the process environment block and loads nothing.
 bool EnvironmentConfigPresent();
 
-// The one entry point both activation paths use. Idempotent and thread-safe:
-// the first caller installs, later ones return the same result without
-// repeating any of it. Returns non-zero on success.
 DWORD InstallOnce(const wchar_t* args);
 
 // --- logging --------------------------------------------------------------
-// At 0 the call sites are removed outright, which constrains every caller:
-// nothing with side effects in a Log argument, and no parameter that exists
-// only to be logged.
 #ifndef HW2HDRPATCH_LOGGING
-#define HW2HDRPATCH_LOGGING 0
+#define HW2HDRPATCH_LOGGING _DEBUG_BOOL
 #endif
 #if HW2HDRPATCH_LOGGING
-using PfnLog = void(__fastcall*)(const wchar_t* format, ...);
+using PfnLog = void(*)(const wchar_t* format, ...);
 extern PfnLog Log;
+void LogFlush();
 #else
 #define Log(...) ((void)0)
+#define LogFlush() ((void)0)
 #endif
 
 // --- DXGI -----------------------------------------------------------------
