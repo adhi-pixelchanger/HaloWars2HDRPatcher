@@ -32,14 +32,15 @@ you: standing rules, and things measured on the testing machine.
   Debug build exists to show which calls the host actually makes, so nothing in
   the diagnostics may summarise, deduplicate or suppress — a first-time-only
   line hides the repeats, and the repeat counts are the data. Debug also
-  patches `Present`, `ResizeBuffers`, `GetContainingOutput` and
-  `SetColorSpace1`, which only forward and log. Measured in the wrapper build:
-  42 fps through a gated movie either way. A session is tens of thousands of
-  lines.
-- **Lie to the host, never to DXGI.** A patched vtable slot is shared with
-  dxgi.dll's own internal calls. Those are logged but answered truthfully, and
-  stay that way unless a measurement shows one needs the lie. Nothing broke
-  when they were lied to, but that was luck, not design.
+  redirects `SetColorSpace1`, which only forwards and logs, and the host's
+  `CreateDXGIFactory1/2` imports. Measured in the wrapper build: 42 fps through
+  a gated movie either way. A session is tens of thousands of lines.
+- **Nothing of DXGI's is modified — not its image, not its vtables.** A vtable
+  belongs to dxgi.dll and is shared by every object of its class, so a patched
+  slot catches DXGI's own internal calls as well as the host's. The host's call
+  site is one instruction in the host's own image and belongs to one caller, so
+  that is what this patches. DXGI's internal calls are therefore invisible now;
+  the count table below is what they looked like while they were not.
 - **No timing.** No sleeps, no frame counts, no deadlines that anything is
   sequenced by, no polling heuristics. Hook the event. (A watchdog whose expiry
   only turns a hang into a diagnosable failure is fine and is not this.)
@@ -166,6 +167,51 @@ DXGI's internal `GetDesc1` calls, above, are not part of it.
   `ResizeBuffers`. The import patch therefore has to stay live for the session,
   not just for startup.
 
+### What the call-site patch depends on
+
+- **The launcher freezes every game thread for the install**, which is the only
+  reason rewriting an instruction in the host is safe. Nothing may move the
+  patch later into the session.
+- **A slot below 16 is reached with an 8-bit displacement**, three bytes, and
+  the replacement needs six. `Present` (8), `ResizeBuffers` (13) and
+  `GetContainingOutput` (15) therefore cannot be redirected in place and are no
+  longer logged. `GetDesc1` (27), `CheckColorSpaceSupport` (37) and
+  `SetColorSpace1` (38) are all far enough in to use a 32-bit displacement.
+- **Control Flow Guard changes which instruction is patched.** A CFG build
+  loads the slot and calls through the guard dispatcher, so the load is what
+  gets redirected; the dispatcher accepts our target because this DLL is not a
+  CFG image. The launcher's mitigation report prints whether the host has CFG.
+- **Arbitrary Code Guard would block it**, since it refuses to make a code page
+  writable. The launcher reports ACG for that reason, and the payload logs a
+  refusal rather than failing quietly.
+- **A displacement identifies nothing.** Measured: **244** call sites reach
+  `+0xD8` (1053 before ordinary stack loads were excluded), **139** reach
+  `+0x128`, **57** reach `+0x130`. Requiring the `GetCurrentBackBufferIndex`
+  slot within 0x100 bytes left 30 of the first set, and 7 of the second. A
+  neighbouring slot is far too common to pick a site with.
+- **Two tests do identify one, and they are what the patcher uses.** The
+  interface id: only the code that asks an object for `IDXGIOutput6` goes on to
+  call `GetDesc1` on it, which took 244 sites to exactly one, `+0x8186D`. Then
+  proximity: a call the host makes beside one already redirected. The id says
+  nothing about `CheckColorSpaceSupport` — the host asks for `IDXGISwapChain3`
+  somewhere else entirely, and that pass returned zero — but its site is
+  `+0x8193F`, 0xD2 bytes past where the descriptor is polled, and
+  `SetColorSpace1` follows that. The slot anchor is the last fallback.
+- **The load form is only looked for in a CFG host.** `48 8B 95 D8 00 00 00` is
+  `mov rdx,[rbp+0D8h]`, an ordinary stack load, and the first scan matched
+  several of those. Without CFG the host has no reason to load a slot before
+  calling it, so outside a CFG image that encoding is not a call site. It also
+  has to be followed by an indirect call.
+- **Scanning costs install time, and the game is frozen for it.** A scan of the
+  host's code per slot measured 3 s for three slots. Finding the other two
+  beside the first took the whole install to **0.97 s**.
+- **The three sites, measured.** `GetDesc1` at `exe+0x8186D`
+  (`FF 90 D8 00 00 00`, `call qword ptr [rax+0D8h]`), `CheckColorSpaceSupport`
+  at `+0x8193F`, `SetColorSpace1` at `+0x8195A` — 0xD2 and 0xED past the first,
+  which is why proximity finds them. Each ends at the return address the vtable
+  build logged for it: `+0x81873`, `+0x81945`, `+0x81960`. Game version
+  1.11.2931.2, and no address is compiled in.
+
 ### The AppContainer ACE is required
 
 | | result |
@@ -259,6 +305,10 @@ compare against and the interceptor looked guilty by coincidence.
   not even enumerable by the user. `dxgi.dll` is not in `KnownDLLs` (checked,
   37 entries), so that is not the blocker; the ACL is. It would also modify the
   installed package, which this project does not do.
+- **Patching DXGI's vtables.** It works, and it is what the `master` branch
+  does, but a vtable slot is shared: every `GetDesc1` DXGI made on an output of
+  its own arrived at the hook too, and was answered with the lie for as long as
+  the gate was open. Nothing broke, and that was luck rather than design.
 - **Relabelling the swap chain alone** for the span of playback. Measured black.
 - **A swap-chain downgrade in `SetColorSpace1`.** It never fires, in either
   build: by the time the gate is open the host has already asked for SDR

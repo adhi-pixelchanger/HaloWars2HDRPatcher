@@ -77,6 +77,36 @@ bool InstallDxgiHooks();
 bool OpenGate();
 bool CloseGate();
 
+// --- call-site patching ---------------------------------------------------
+// The host's own call site is rewritten, not the vtable behind it: a vtable
+// belongs to dxgi.dll and is shared with its internal calls, while a call site
+// belongs to one caller. Install-time only, while the launcher has the host's
+// threads frozen.
+enum class CallSiteOutcome
+{
+    Patched,
+    NotFound,
+    Ambiguous,
+    OutOfReach,
+    ProtectFailed,
+};
+
+struct VirtualCall
+{
+    size_t slot;            // vtable index the host calls through
+    size_t anchorSlot;      // another slot used nearby, to tell two sites apart
+    const void* nearSite;   // search around this address only, or null for the
+                            // whole image
+    const IID* anchorIid;   // the interface the host asks for beside the call,
+                            // which is what actually identifies it
+};
+
+// replacement must have the method's own signature; site reports where it
+// landed, which is what a later nearSite is.
+CallSiteOutcome PatchVirtualCall(const VirtualCall& call, void* replacement,
+                                 const void** site);
+const wchar_t* Describe(CallSiteOutcome outcome);
+
 // --- IAT patching (HDR mode only) -----------------------------------------
 // No "original" out-parameter: the real addresses come from GetProcAddress
 // against the pinned module, not from the slot being overwritten.

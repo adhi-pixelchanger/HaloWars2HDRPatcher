@@ -261,10 +261,12 @@ DWORD InstallOnce(const wchar_t* args)
     if (!InstallHooks())
     {
         Log(L"[!] hook installation failed - the host is unmodified");
+        LogFlush();
         return result;   // still 0
     }
 
     Log(L"install complete");
+    LogFlush();
     result = 1;
     return result;
 }

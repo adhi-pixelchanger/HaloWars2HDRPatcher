@@ -2,8 +2,10 @@
 //
 // Only MicrosoftSignedOnly (Code Integrity Guard) blocks this design.
 // DisableExtensionPoints blocks SetWindowsHookEx loaders, not
-// CreateRemoteThread; Arbitrary Code Guard does not apply, because no
-// executable memory is allocated and the vtable patches touch .rdata.
+// CreateRemoteThread. No memory is ever made executable, but the payload does
+// make one of the host's code pages writable for the length of an instruction,
+// which Arbitrary Code Guard would refuse; the payload reports that rather
+// than failing quietly.
 
 #include "Launcher.h"
 
@@ -91,8 +93,9 @@ void ReportMitigations(const MitigationReport& report) {
     Info(L"  Extension point policy");
     Info(L"    DisableExtensionPoints ......... %s   (hook-based loaders only)",
          YesNo(report.disableExtensionPoints));
-    Info(L"  Dynamic code policy (not relevant to this injector)");
-    Info(L"    ProhibitDynamicCode (ACG) ...... %s", YesNo(report.prohibitDynamicCode));
+    Info(L"  Dynamic code policy");
+    Info(L"    ProhibitDynamicCode (ACG) ...... %s   <- would block the call-site "
+         L"patch", YesNo(report.prohibitDynamicCode));
     Info(L"    AllowThreadOptOut .............. %s", YesNo(report.allowThreadOptOut));
     Info(L"  Control flow guard");
     Info(L"    EnableControlFlowGuard ......... %s", YesNo(report.cfgEnabled));
