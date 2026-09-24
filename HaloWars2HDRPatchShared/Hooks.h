@@ -77,7 +77,7 @@ bool InstallDxgiHooks();
 bool OpenGate();
 bool CloseGate();
 
-// --- IAT patching (HDR mode only) -----------------------------------------
+// --- IAT patching ---------------------------------------------------------
 // No "original" out-parameter: the real addresses come from GetProcAddress
 // against the pinned module, not from the slot being overwritten.
 struct ImportPatch

@@ -24,7 +24,7 @@
 // RIP-relative operand reaches; no memory is made executable. Install time
 // only, with the game's threads frozen.
 
-#include "Hooks.h"
+#include "CallSitePatch.h"
 
 #include <cstring>
 

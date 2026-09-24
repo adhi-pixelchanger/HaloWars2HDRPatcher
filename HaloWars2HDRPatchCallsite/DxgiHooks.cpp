@@ -6,7 +6,7 @@
 // Nothing of DXGI's is modified: the host's own call sites are redirected
 // instead, so only its calls arrive here. See CallSitePatch.cpp.
 
-#include "Hooks.h"
+#include "CallSitePatch.h"
 
 #include <atomic>
 #include <cstdio>

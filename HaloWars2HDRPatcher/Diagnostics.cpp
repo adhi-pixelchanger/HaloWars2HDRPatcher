@@ -1,6 +1,6 @@
 // Diagnostics.cpp - whether this process can be injected at all.
 //
-// Only MicrosoftSignedOnly (Code Integrity Guard) blocks this design.
+// Only MicrosoftSignedOnly (Code Integrity Guard) blocks injection.
 // DisableExtensionPoints blocks SetWindowsHookEx loaders, not
 // CreateRemoteThread. No payload allocates executable memory, so Arbitrary
 // Code Guard only matters to the Callsite payload, which makes a code page

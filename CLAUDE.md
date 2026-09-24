@@ -10,11 +10,14 @@ The payloads apply the same fix and differ only in how they intercept DXGI:
 
 | project | DLL | intercepts by |
 | --- | --- | --- |
-| `HaloWars2HDRPatch/` | `HaloWars2HDRPatchVtable.dll` | patching DXGI's vtables; the launcher's default |
+| `HaloWars2HDRPatchVtable/` | `HaloWars2HDRPatchVtable.dll` | patching DXGI's vtables; the launcher's default |
 | `HaloWars2HDRPatchCallsite/` | `HaloWars2HDRPatchCallsite.dll` | rewriting the host's own call sites |
 | `HaloWars2HDRPatchQI/` | `HaloWars2HDRPatchQI.dll` | handing the host proxy DXGI objects |
 
-Each payload folder has its own CLAUDE.md for what is specific to it.
+What they have in common — config, logging, the Bink gate, import patching,
+`dllmain.cpp` and `Hooks.h` — lives once, in `HaloWars2HDRPatchShared/`, a
+static library each DLL links. Each payload folder holds only its DXGI
+interception and a CLAUDE.md for what is specific to it.
 
 Read the code for how it works. This file is only what the code cannot tell
 you: standing rules, and things measured on the testing machine.
@@ -48,9 +51,10 @@ you: standing rules, and things measured on the testing machine.
 - **The DLL owns no persistent threads.** Nothing may outlive install: a
   lasting thread would have to be stopped from `DLL_PROCESS_DETACH`, which runs
   under the loader lock, so it could not be joined.
-- **Nothing mutates outside the gate.** Outside a gated movie the DLL must be
-  indistinguishable from not being injected. If a change seems to need a DXGI
-  call outside the gate, the design is wrong, not the invariant.
+- **Nothing mutates outside the gate.** Outside a gated movie every answer the
+  host gets must be the one DXGI gave. A payload's only DXGI calls of its own
+  are the ones that reach the objects it patches or wraps; if a change seems to
+  need any other, the design is wrong, not the invariant.
 - **Never call `SetColorSpace1` unsolicited.** Answer what the host asks;
   initiate nothing.
 - **A checkbox is a claim that the answer varies.** Do not add an option for a
@@ -61,8 +65,9 @@ you: standing rules, and things measured on the testing machine.
 - **The launcher runs non-elevated.** `ActivateApplication` refuses to start
   Store apps from an elevated process, and the game is Low integrity under the
   same user anyway.
-- Deploy to a short top-level path. Line endings: the launcher project is CRLF,
-  the DLL projects are LF — do not flip either wholesale.
+- Deploy to a short top-level path. Line endings are mixed and stay that way:
+  payload sources are LF, every `.vcxproj` is CRLF, and the launcher is CRLF
+  except `HooksConfig.cpp` and the `.rc`. Never flip a file wholesale.
 
 ## Requirements behind two design choices
 
@@ -92,13 +97,20 @@ you: standing rules, and things measured on the testing machine.
 Left to itself, the host takes both its *encode* decision and its *label* from
 the descriptor. When the gate opens it re-decides through its display-change
 handler: `ResizeBuffers` to `R8G8B8A8_UNORM`, then `CheckColorSpaceSupport` and
-its own `SetColorSpace1(SDR)`, 46 ms after the gate opened:
+its own `SetColorSpace1(SDR)`, all on the first poll after the gate opens. The
+78 ms before that poll, in this Vtable session, is the render thread stalled in
+`BinkOpen`, not the host deciding:
 
 ```
-77.891  ==== gate OPEN ====
-77.937  host ResizeBuffers(2 buffers, 3440x1440, R8G8B8A8_UNORM, flags 0x800) (0x00000000)
-77.937  host CheckColorSpaceSupport(0 SDR) (0x00000000) [gate open]
-77.937  host SetColorSpace1(0 SDR) (0x00000000) [gate open]
+66.000  Present(sync 2, flags 0x0) (0x00000000)
+66.015  BinkOpen("data\ui\skins\default\videos\MB_M00_Prologue.bk2", flags=0x01104000) gated
+66.031  ==== gate OPEN ====
+66.109  GetDesc1(0000040FF108A860) from HaloWars2_WinAppDX12Final.exe+0x81873, thread 26676 (0x00000000) [gate open]
+66.109  CreateDXGIFactory1(IDXGIFactory) (0x00000000)
+  ...
+66.109  ResizeBuffers(2, 3440x1440, R8G8B8A8_UNORM, flags 0x800) (0x00000000)
+66.109  CheckColorSpaceSupport(0 SDR) from HaloWars2_WinAppDX12Final.exe+0x81945 (0x00000000) [gate open]
+66.109  SetColorSpace1(0 SDR) (0x00000000)
 ```
 
 The `SetColorSpace1` downgrade was removed: it never fired, in HDR or SDR mode,
@@ -161,8 +173,8 @@ did; DXGI's own `GetDesc1` calls, above, are not part of it.
   came from `EnumOutputs`.
 - On every display change it **builds a whole new factory**:
   `CreateDXGIFactory1` → `EnumAdapters(0)` → `EnumOutputs(0)` → `GetDesc` →
-  `ResizeBuffers`. The import patch therefore has to stay live for the session,
-  not just for startup.
+  `ResizeBuffers`. A payload that follows the host's factories — QI wraps each
+  one — therefore keeps its import patch live for the session.
 
 ### The AppContainer ACE is required
 
@@ -218,8 +230,7 @@ and short-circuits, so `MovieMatchesFilter` never sees the pointer. Such a
 movie is never gated, which is correct: there is no name to match, and the
 gated ones all arrive as real paths.
 
-Nothing in the source hints at this. Restore the check if `MovieMatchesFilter`
-is ever rewritten.
+Restore the check if `MovieMatchesFilter` is ever rewritten.
 
 ### Dirty pillarboxes are a game bug
 
@@ -296,6 +307,11 @@ compare against and the interceptor looked guilty by coincidence.
 - `IDC_STATIC` is `-1`, so `GetDlgItem(dialog, -1)` cannot pick one static out
   of several. Anything `LayoutView` shows or hides needs a real control id.
 - `StatusIcon.h` needs `NOMINMAX` before `windows.h`.
+- **`dllmain.cpp` is compiled into each DLL, not into the shared library.** From
+  a `.lib`, nothing pulls it in before the CRT's own default `DllMain` stub
+  satisfies the reference, so the linker drops it and the DLL builds cleanly
+  with no exports — neither install route can then run. Check with
+  `dumpbin /exports` for `HaloWars2HDRPatchInstall` after touching the projects.
 - Prefer a namespace-scope `SRWLOCK g_x = SRWLOCK_INIT;` to a lock behind a
   function-local `static`. `SRWLOCK_INIT` is `{0}`, so it is constant-
   initialised before any code in the image runs; a function-local static is

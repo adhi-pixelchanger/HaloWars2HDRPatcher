@@ -6,12 +6,14 @@ CLAUDE.md applies here too; this file is only what is specific to this payload.
 
 - **A patched slot is shared, and DXGI's own calls come through it.** dxgi.dll
   calls `GetDesc1` on every output it creates, so those get the same answer the
-  host does. Measured harmless over whole sessions. Every hook logs its caller,
-  which is how that was established and how it stays checkable — but no hook
-  branches on it, and none should.
+  host does. Measured harmless over whole sessions. `GetDesc1`,
+  `CheckColorSpaceSupport` and `GetContainingOutput` log their caller, which is
+  how that was established and how it stays checkable — but no hook branches
+  on it, and none should.
 - **Debug patches more than Release.** `Present`, `ResizeBuffers`,
   `GetContainingOutput` and `SetColorSpace1` are patched only to forward and
-  log, along with the host's `CreateDXGIFactory1/2` imports.
+  log. The `CreateDXGIFactory1/2` import patch is in both builds: it is how the
+  payload reaches the vtables at all.
 
 ## Do not retry these
 

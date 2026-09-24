@@ -8,8 +8,10 @@ this file is only what is specific to this payload.
 ## What the call-site patch depends on
 
 - **The launcher freezes every game thread for the install**, which is the only
-  reason rewriting an instruction in the host is safe. Nothing may move the
-  patch later into the session.
+  reason rewriting an instruction in the host is safe. That holds for the
+  default argument route only: on the environment route `DllMain` installs on
+  its own thread and the launcher resumes the game without waiting, so there
+  the rewrite races the host's startup. Nothing may move the patch later.
 - **A slot below 16 is reached with an 8-bit displacement**, three bytes, and
   the replacement needs six. `Present` (8), `ResizeBuffers` (13) and
   `GetContainingOutput` (15) therefore cannot be redirected in place and are
@@ -42,6 +44,7 @@ this file is only what is specific to this payload.
   took the whole install to **0.97 s**.
 - **The three sites, measured.** `GetDesc1` at `exe+0x8186D`
   (`FF 90 D8 00 00 00`, `call qword ptr [rax+0D8h]`), `CheckColorSpaceSupport`
-  at `+0x8193F`, `SetColorSpace1` at `+0x8195A`. Each ends at the return
-  address the Vtable payload logs for it: `+0x81873`, `+0x81945`, `+0x81960`.
-  Game version 1.11.2931.2, and no address is compiled in.
+  at `+0x8193F`, `SetColorSpace1` at `+0x8195A`. Each ends at its logged
+  return address: `+0x81873` and `+0x81945` from the Vtable payload,
+  `+0x81960` from this one. Game version 1.11.2931.2, and no address is
+  compiled in.

@@ -1,7 +1,7 @@
 // DxgiHooks.cpp - the DXGI descriptor lie, and the gate that scopes it.
 //
 // Invariant: with the gate shut every hook returns the original's result
-// untouched, and no hook initiates a DXGI call of its own.
+// untouched; a hook's only DXGI calls of its own reach what it patches.
 //
 // The install creates no factory: it redirects the host's CreateDXGIFactory1/2
 // imports and patches vtables from the factory the host creates. Creating one

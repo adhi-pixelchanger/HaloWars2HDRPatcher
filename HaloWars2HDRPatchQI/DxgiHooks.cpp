@@ -1,7 +1,7 @@
 // DxgiHooks.cpp - the DXGI descriptor lie, and the gate that scopes it.
 //
 // Invariant: with the gate shut every override returns the real object's answer
-// untouched, and no override initiates a DXGI call of its own.
+// untouched; an override's only DXGI calls of its own reach what it wraps.
 //
 // The install creates no factory - it redirects the host's imports of
 // CreateDXGIFactory1/2 and hands back a wrapper around what DXGI returned. The
