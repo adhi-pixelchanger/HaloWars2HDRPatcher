@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cwchar>
 #include <vector>
+#include <fstream>
 
 namespace hw2hdr
 {
@@ -30,7 +31,6 @@ Config g_config;
 namespace
 {
 
-std::wstring g_logPath;
 ULONGLONG g_startTick = 0;
 
 const wchar_t* ModeName(Mode mode)
@@ -144,10 +144,11 @@ void LoadConfig(const wchar_t* args)
 #if HW2HDRPATCH_LOGGING
 
 SRWLOCK g_logLock = SRWLOCK_INIT;
+std::unique_ptr<std::wofstream> g_logFile;
 
 // The compile-time switch removes this whole block and every call site.
-void __fastcall LogNoop(const wchar_t* /*format*/, ...) {}
-void __fastcall LogImpl(const wchar_t* format, ...);
+void LogNoop(const wchar_t* /*format*/, ...) {}
+void LogImpl(const wchar_t* format, ...);
 
 PfnLog Log = LogNoop;
 
@@ -179,20 +180,11 @@ void InitLog()
             GetLastError());
         return;
     }
-    g_logPath = std::wstring(temp) + L"HaloWars2HDRPatch.log";
-
-    HANDLE file = CreateFileW(g_logPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
-                              nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file != INVALID_HANDLE_VALUE)
-    {
-        const unsigned char bom[] = {0xFF, 0xFE};
-        DWORD written = 0;
-        WriteFile(file, bom, sizeof(bom), &written, nullptr);
-        CloseHandle(file);
-    }
+    const auto logPath = std::wstring(temp) + L"HaloWars2HDRPatch.log";
+    g_logFile.reset(new std::wofstream(logPath));
 }
 
-void __fastcall LogImpl(const wchar_t* format, ...)
+void LogImpl(const wchar_t* format, ...)
 {
     AutoSRWLockExclusive logLock(g_logLock);
 
@@ -209,22 +201,19 @@ void __fastcall LogImpl(const wchar_t* format, ...)
 
     OutputDebugStringW(line);
 
-    if (g_logPath.empty())
+    if (g_logFile && g_logFile->is_open())
     {
-        return;
+        *g_logFile << line;
     }
+}
 
-    HANDLE file = CreateFileW(g_logPath.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ,
-                              nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE)
+void LogFlush()
+{
+    AutoSRWLockExclusive logLock(g_logLock);
+    if (g_logFile && g_logFile->is_open())
     {
-        return;
+        g_logFile->flush();
     }
-
-    DWORD written = 0;
-    WriteFile(file, line, static_cast<DWORD>(wcslen(line) * sizeof(wchar_t)), &written,
-              nullptr);
-    CloseHandle(file);
 }
 
 #else  // !HW2HDRPATCH_LOGGING
@@ -238,12 +227,8 @@ void InitLog()
 
 SRWLOCK g_installLock = SRWLOCK_INIT;
 
-// Both activation paths land here, and either may be the only one, or both may
-// fire for the same process: our launcher passing a list while the environment
-// variable also happens to be set, or a third-party injector that both
-// LoadLibrary's us and calls the export. The lock makes concurrent callers wait
-// rather than race, and the flag makes the later ones no-ops returning the same
-// answer.
+// Both activation paths land here, possibly both for one process. The lock makes
+// a second caller wait; the flag makes it a no-op returning the same answer.
 DWORD InstallOnce(const wchar_t* args)
 {    
     AutoSRWLockExclusive installLock(g_installLock);
@@ -259,9 +244,8 @@ DWORD InstallOnce(const wchar_t* args)
 
     LoadConfig(args);
     InitLog();
-    Log(L"==== attached to pid %lu (%s) ====", GetCurrentProcessId(),
-        args != nullptr ? L"config from installer argument"
-                        : L"config from " HW2HDRPATCH_ENV_NAME L" / defaults");
+    Log(L"==== pid %lu, config from %s ====", GetCurrentProcessId(),
+        args != nullptr ? L"launcher" : HW2HDRPATCH_ENV_NAME L" or defaults");
 
     wchar_t exePath[MAX_PATH] = {};
     if (GetModuleFileNameW(nullptr, exePath, MAX_PATH) != 0)
@@ -271,18 +255,20 @@ DWORD InstallOnce(const wchar_t* args)
 
     if (!InstallHooks())
     {
-        Log(L"[!] hook installation failed - the host is unmodified");
+        Log(L"[!] install failed; host unmodified");
+        LogFlush();
         return result;   // still 0
     }
 
     Log(L"install complete");
+    LogFlush();
     result = 1;
     return result;
 }
 
 bool InstallHooks()
 {
-    Log(L"Mode ........... %s", ModeName(g_config.mode));
+    Log(L"Mode: %s", ModeName(g_config.mode));
 
     if (!InstallDxgiHooks())
     {
@@ -292,31 +278,18 @@ bool InstallHooks()
     if (g_config.mode == Mode::Sdr)
     {
         OpenGate();
-        Log(L"    ...and stays open for the whole session.");
         return true;
     }
 
-    Log(L"Bink module .... %s", kBinkModule);
-    Log(L"Gate filter .... \"%s\"",
+    Log(L"Gate filter: \"%s\"",
         g_config.gateFilter.empty() ? L"(every movie)" : g_config.gateFilter.c_str());
-
-    const HMODULE bink = GetModuleHandleW(kBinkModule);
-    Log(L"Bink module %s at startup.",
-        bink != nullptr ? L"is loaded" : L"is NOT yet loaded");
 
     if (!InstallBinkHooks())
     {
-        Log(L"[!] Nothing imports %s by name, so HDR mode has no movie "
-            L"boundaries to gate on and will do nothing.",
-            kBinkModule);
-        if (bink != nullptr)
-        {
-            Log(L"[!] The module IS loaded but nothing imports it by name. The host "
-                L"is binding Bink dynamically through GetProcAddress, which an "
-                L"import-table patch cannot reach.");
-        }
+        Log(L"[!] nothing imports %s by name (%s); no movie will be gated",
+            kBinkModule,
+            GetModuleHandleW(kBinkModule) != nullptr ? L"loaded" : L"not loaded");
     }
-
     return true;
 }
 

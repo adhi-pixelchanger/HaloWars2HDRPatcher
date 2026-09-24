@@ -11,6 +11,11 @@ namespace
 using PfnBinkOpen = void*(__stdcall*)(const char* name, UINT32 flags);
 using PfnBinkClose = void(__stdcall*)(void* bink);
 
+// Set on a BinkOpen whose "name" is the KB2j Bink 2 magic rather than a path:
+// name then points at the video data, so it is not a string - it must not be
+// read as one, let alone filtered. The value comes from logs, not a Bink header.
+constexpr UINT32 kBinkFromMemory = 0x04000000;
+
 PfnBinkOpen g_origOpen = nullptr;
 PfnBinkClose g_origClose = nullptr;
 
@@ -64,39 +69,35 @@ bool MovieMatchesFilter(const char* name, const std::wstring& filter)
 
 void* __stdcall HookBinkOpen(const char* name, UINT32 flags)
 {
-    const bool gateThisMovie = MovieMatchesFilter(name, g_config.gateFilter);
+    const bool fromMemory = (flags & kBinkFromMemory) != 0;
+    const bool gateThisMovie =
+        !fromMemory && MovieMatchesFilter(name, g_config.gateFilter);
 
-    Log(L"BinkOpen(\"%S\", flags=0x%08X)", name != nullptr ? name : "(null)", flags);
-    Log(L"    gate filter \"%s\": %s",
-        g_config.gateFilter.empty() ? L"(every movie)" : g_config.gateFilter.c_str(),
-        gateThisMovie ? L"GATING this movie (display presented as SDR)"
-                      : L"leaving this movie in the host's own HDR path");
+    if (fromMemory)
+    {
+        Log(L"BinkOpen(from memory, flags=0x%08X)", flags);
+    }
+    else
+    {
+        Log(L"BinkOpen(\"%S\", flags=0x%08X)%s", name != nullptr ? name : "(null)",
+            flags, gateThisMovie ? L" gated" : L"");
+    }
 
     if (gateThisMovie)
     {
-        if (OpenGate())
-        {
-            Log(L"    ...opened for this movie.");
-        }
+        OpenGate();
     }
-    else if (CloseGate())
+    else
     {
-        Log(L"    ...closed before this movie opens.");
+        CloseGate();
     }
-
-    void* const bink = g_origOpen(name, flags);
-    Log(L"    -> %p", bink);
-    return bink;
+    return g_origOpen(name, flags);
 }
 
 void __stdcall HookBinkClose(void* bink)
 {
-    Log(L"BinkClose(%p)", bink);
-
-    if (CloseGate())
-    {
-        Log(L"    ...closed at end of movie.");
-    }
+    Log(L"BinkClose");
+    CloseGate();
     g_origClose(bink);
 }
 
@@ -122,9 +123,7 @@ bool ResolveBinkExports()
     auto close = reinterpret_cast<PfnBinkClose>(GetProcAddress(bink, "BinkClose"));
     if (open == nullptr || close == nullptr)
     {
-        Log(L"[!] %s does not export BinkOpen/BinkClose - wrong module name? The "
-            L"gate cannot be driven without both.",
-            kBinkModule);
+        Log(L"[!] %s does not export BinkOpen/BinkClose", kBinkModule);
         return false;
     }
 
@@ -145,14 +144,7 @@ bool InstallBinkHooks()
         {"BinkClose", &HookBinkClose},
     };
 
-    const size_t total =
-        PatchImports(kBinkModule, patches, _countof(patches));
-
-    if (total > 0)
-    {
-        Log(L"Bink hooks live against %s.", kBinkModule);
-    }
-    return total > 0;
+    return PatchImports(kBinkModule, patches, _countof(patches)) > 0;
 }
 
 }  // namespace hw2hdr

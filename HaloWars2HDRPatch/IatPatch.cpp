@@ -133,6 +133,13 @@ size_t PatchModuleImportsUnguarded(HMODULE module, const wchar_t* moduleName,
     return patched;
 }
 
+// Pure, and [[maybe_unused]] because its only caller is a Log argument.
+[[maybe_unused]] const wchar_t* LeafName(const wchar_t* path)
+{
+    const wchar_t* slash = wcsrchr(path, L'\\');
+    return slash != nullptr ? slash + 1 : path;
+}
+
 size_t PatchModuleImports(HMODULE module, const wchar_t* moduleName,
                           const ImportPatch* patches, size_t patchCount)
 {
@@ -142,17 +149,14 @@ size_t PatchModuleImports(HMODULE module, const wchar_t* moduleName,
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
-        // Unmapped or half-initialised underneath us; it has nothing for us
-        // either way, and faulting would take the host down mid-startup.
+        // Unmapped or half-initialised underneath us; faulting would take the
+        // host down. Skipping it leaves its imports unpatched, so it is logged.
+        [[maybe_unused]] const DWORD code = GetExceptionCode();
+        wchar_t path[MAX_PATH] = {};
+        GetModuleFileNameW(module, path, MAX_PATH);
+        Log(L"[!] 0x%08X reading %s imports, skipped", code, LeafName(path));
         return 0;
     }
-}
-
-// Pure, and [[maybe_unused]] because its only caller is a Log argument.
-[[maybe_unused]] const wchar_t* LeafName(const wchar_t* path)
-{
-    const wchar_t* slash = wcsrchr(path, L'\\');
-    return slash != nullptr ? slash + 1 : path;
 }
 
 }  // namespace
