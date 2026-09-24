@@ -358,7 +358,7 @@ namespace launcher {
 RunOptions DefaultRunOptions() {
     RunOptions options;
     options.packageNeedle = L"HoganThreshold";
-    options.dllPath = ExecutableDirectory() + L"\\HaloWars2HDRPatch.dll";
+    options.dllPath = ExecutableDirectory() + L"\\HaloWars2HDRPatchQI.dll";
 
     options.hooks = HooksConfig();
     return options;

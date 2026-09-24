@@ -9,7 +9,7 @@ Copy both files into a short folder you own, such as `C:\HaloWars2HDRPatch\`:
 
 ```
 HaloWars2HDRPatcher.exe
-HaloWars2HDRPatch.dll
+HaloWars2HDRPatchQI.dll
 ```
 
 Avoid OneDrive and deep user-profile paths. If the files came out of a ZIP,
