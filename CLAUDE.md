@@ -1,11 +1,19 @@
 # HaloWars2HDRPatch
 
-A hook DLL (`HaloWars2HDRPatch/`) and a launcher (`HaloWars2HDRPatcher/`) that
-make Halo Wars 2's mission briefing videos visible while Windows HDR stays on.
-The game is a UWP / AppContainer DX12 title, `Microsoft.HoganThreshold_...
-_8wekyb3d8bbwe`, exe `HaloWars2_WinAppDX12Final`. Package filter is
-`HoganThreshold`, not `HaloWars2`. Payload logs land in
-`%LOCALAPPDATA%\Packages\<family>\AC\Temp\`.
+Hook DLLs and a launcher (`HaloWars2HDRPatcher/`) that make Halo Wars 2's
+mission briefing videos visible while Windows HDR stays on. The game is a UWP /
+AppContainer DX12 title, `Microsoft.HoganThreshold_..._8wekyb3d8bbwe`, exe
+`HaloWars2_WinAppDX12Final`. Package filter is `HoganThreshold`, not
+`HaloWars2`. Payload logs land in `%LOCALAPPDATA%\Packages\<family>\AC\Temp\`.
+
+The payloads apply the same fix and differ only in how they intercept DXGI:
+
+| project | DLL | intercepts by |
+| --- | --- | --- |
+| `HaloWars2HDRPatch/` | `HaloWars2HDRPatchVtable.dll` | patching DXGI's vtables; the launcher's default |
+| `HaloWars2HDRPatchCallsite/` | `HaloWars2HDRPatchCallsite.dll` | rewriting the host's own call sites |
+
+Each payload folder has its own CLAUDE.md for what is specific to it.
 
 Read the code for how it works. This file is only what the code cannot tell
 you: standing rules, and things measured on the testing machine.
@@ -31,16 +39,8 @@ you: standing rules, and things measured on the testing machine.
 - **Release logs nothing; Debug logs every call, per frame included.** The
   Debug build exists to show which calls the host actually makes, so nothing in
   the diagnostics may summarise, deduplicate or suppress — a first-time-only
-  line hides the repeats, and the repeat counts are the data. Debug also
-  patches `Present`, `ResizeBuffers`, `GetContainingOutput` and
-  `SetColorSpace1`, which only forward and log, plus the host's
-  `CreateDXGIFactory1/2` imports. Measured: 42 fps through a gated movie either
-  way. A session is tens of thousands of lines.
-- **A patched slot is shared, and DXGI's own calls come through it.** dxgi.dll
-  calls `GetDesc1` on every output it creates, so those get the same answer the
-  host does. Measured harmless over whole sessions. Every hook logs its caller,
-  which is how that was established and how it stays checkable — but no hook
-  branches on it, and none should.
+  line hides the repeats, and the repeat counts are the data. Measured: 42 fps
+  through a gated movie either way. A session is tens of thousands of lines.
 - **No timing.** No sleeps, no frame counts, no deadlines that anything is
   sequenced by, no polling heuristics. Hook the event. (A watchdog whose expiry
   only turns a hang into a diagnosable failure is fine and is not this.)
@@ -61,7 +61,7 @@ you: standing rules, and things measured on the testing machine.
   Store apps from an elevated process, and the game is Low integrity under the
   same user anyway.
 - Deploy to a short top-level path. Line endings: the launcher project is CRLF,
-  the DLL project is LF — do not flip either wholesale.
+  the DLL projects are LF — do not flip either wholesale.
 
 ## Requirements behind two design choices
 
@@ -132,8 +132,8 @@ not spot-checked.
   before handing the object back. The host re-acquires its output every frame,
   so each `GetContainingOutput` carries one DXGI call on the output it then
   returns — 8533 of 8533 in HDR, 8257 of 8257 in SDR. The rest are one at
-  swap-chain creation and two per display-change factory rebuild. They reach
-  the hook like any other call and are answered like one.
+  swap-chain creation and two per display-change factory rebuild. A patched
+  vtable slot sees them; a patched call site does not.
 - It then **reallocates the back buffers**: `R8G8B8A8_UNORM` when the gate
   opens, `R10G10B10A2_UNORM` when it closes. The game keeps two whole render
   configurations and switches on the descriptor.
@@ -256,10 +256,6 @@ compare against and the interceptor looked guilty by coincidence.
   not even enumerable by the user. `dxgi.dll` is not in `KnownDLLs` (checked,
   37 entries), so that is not the blocker; the ACL is. It would also modify the
   installed package, which this project does not do.
-- **Telling DXGI's calls from the host's at run time**, to withhold the lie
-  from them. It costs a test on the hottest path in the DLL to change nothing
-  that has ever been measured: the counts below are what the lie reaches, and
-  the videos are correct with all of it reached.
 - **Relabelling the swap chain alone** for the span of playback. Measured black.
 - **A swap-chain downgrade in `SetColorSpace1`.** It never fires: by the time
   the gate is open the host has already asked for SDR itself.
