@@ -12,6 +12,7 @@ The payloads apply the same fix and differ only in how they intercept DXGI:
 | --- | --- | --- |
 | `HaloWars2HDRPatch/` | `HaloWars2HDRPatchVtable.dll` | patching DXGI's vtables; the launcher's default |
 | `HaloWars2HDRPatchCallsite/` | `HaloWars2HDRPatchCallsite.dll` | rewriting the host's own call sites |
+| `HaloWars2HDRPatchQI/` | `HaloWars2HDRPatchQI.dll` | handing the host proxy DXGI objects |
 
 Each payload folder has its own CLAUDE.md for what is specific to it.
 
@@ -133,7 +134,7 @@ not spot-checked.
   so each `GetContainingOutput` carries one DXGI call on the output it then
   returns — 8533 of 8533 in HDR, 8257 of 8257 in SDR. The rest are one at
   swap-chain creation and two per display-change factory rebuild. A patched
-  vtable slot sees them; a patched call site does not.
+  vtable slot sees them; a patched call site and a proxy object do not.
 - It then **reallocates the back buffers**: `R8G8B8A8_UNORM` when the gate
   opens, `R10G10B10A2_UNORM` when it closes. The game keeps two whole render
   configurations and switches on the descriptor.

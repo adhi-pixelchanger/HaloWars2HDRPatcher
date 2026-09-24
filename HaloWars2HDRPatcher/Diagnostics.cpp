@@ -4,7 +4,7 @@
 // DisableExtensionPoints blocks SetWindowsHookEx loaders, not
 // CreateRemoteThread. No payload allocates executable memory, so Arbitrary
 // Code Guard only matters to the Callsite payload, which makes a code page
-// writable; the Vtable payload writes only .rdata.
+// writable; the others write only data - vtables and import tables.
 
 #include "Launcher.h"
 
