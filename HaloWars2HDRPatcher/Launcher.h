@@ -40,6 +40,14 @@ void GiveForegroundTo(HANDLE process, DWORD pid);
 
 bool RunRemoteInstall(HANDLE process, const std::wstring& dllPath,
                       const std::wstring& configArgs);
+
+// The payload sets it, the game's pid appended, when its self-install is done.
+// Hooks.h in HaloWars2HDRPatchShared carries the same text.
+constexpr const wchar_t* kInstallEventPrefix = L"HaloWars2HDRPatch.InstallComplete.";
+
+// Created in the game's own AppContainer namespace, where the payload's
+// unqualified name resolves. Null if it could not be made.
+HANDLE CreateInstallEvent(HANDLE process, DWORD pid);
 std::vector<std::wstring> EnumerateModules(HANDLE process);
 bool IsModuleLoaded(HANDLE process, const std::wstring& fileName);
 
@@ -63,7 +71,12 @@ struct MitigationReport {
 MitigationReport QueryMitigations(HANDLE process);
 void ReportMitigations(const MitigationReport& report);
 
-std::wstring InjectionVerdict(const MitigationReport& report);
+// Arbitrary Code Guard refuses to make a code page writable, which only the
+// Callsite payload needs. Injection itself is unaffected.
+bool AcgBlocksPayload(const MitigationReport& report, const std::wstring& dllPath);
+
+std::wstring InjectionVerdict(const MitigationReport& report,
+                              const std::wstring& dllPath);
 
 enum class DllArch { Unknown, X86, X64, Arm64 };
 DllArch QueryDllArchitecture(const std::wstring& path);
@@ -111,6 +124,28 @@ bool HooksEnvironmentIsSet();
 bool SetHooksEnvironment(const std::wstring& value);
 bool ClearHooksEnvironment();
 
+// --- payload strategy -----------------------------------------------------
+// One hook DLL per way of intercepting DXGI, HaloWars2HDRPatch<name>.dll. The
+// order is the order the dropdowns list them in.
+enum class Strategy
+{
+    Vtable,
+    Callsite,
+    QI,
+};
+
+constexpr Strategy kStrategies[] = {Strategy::Vtable, Strategy::Callsite, Strategy::QI};
+constexpr Strategy kDefaultStrategy = Strategy::Callsite;
+
+const wchar_t* StrategyName(Strategy strategy);
+
+// Beside the launcher.
+std::wstring StrategyDllPath(Strategy strategy);
+
+// The strategy whose DLL a path names, by file name wherever it lives; false
+// for any other file.
+bool StrategyOfPath(const std::wstring& path, Strategy* strategy);
+
 // --- orchestration --------------------------------------------------------
 struct RunOptions {
     std::wstring packageNeedle;
@@ -121,7 +156,7 @@ struct RunOptions {
 
     // Deliver the config through HW2HDRPATCH and let the DLL install itself,
     // instead of calling its exported installer. Exercises the path a
-    // third-party injector would take - see Workflow.cpp for what it costs.
+    // third-party injector would take; the resume waits on the install event.
     bool useEnvironmentConfig = false;
 };
 

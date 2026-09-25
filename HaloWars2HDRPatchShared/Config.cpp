@@ -227,6 +227,33 @@ void InitLog()
 
 SRWLOCK g_installLock = SRWLOCK_INIT;
 
+namespace
+{
+
+// The launcher's env-var route resumes the game only once this is set. No event
+// means nobody is waiting: the argument route, or another injector.
+void SignalInstallComplete()
+{
+    wchar_t name[96] = {};
+    swprintf_s(name, L"%s%lu", kInstallEventPrefix, GetCurrentProcessId());
+
+    const HANDLE event = OpenEventW(EVENT_MODIFY_STATE, FALSE, name);
+    if (event == nullptr)
+    {
+        const DWORD error = GetLastError();
+        if (error != ERROR_FILE_NOT_FOUND)
+        {
+            Log(L"[!] cannot open install event %s (%lu)", name, error);
+        }
+        return;
+    }
+
+    SetEvent(event);
+    CloseHandle(event);
+}
+
+}  // namespace
+
 // Both activation paths land here, possibly both for one process. The lock makes
 // a second caller wait; the flag makes it a no-op returning the same answer.
 DWORD InstallOnce(const wchar_t* args)
@@ -253,7 +280,10 @@ DWORD InstallOnce(const wchar_t* args)
         Log(L"host: %s", exePath);
     }
 
-    if (!InstallHooks())
+    const bool installed = InstallHooks();
+    SignalInstallComplete();
+
+    if (!installed)
     {
         Log(L"[!] install failed; host unmodified");
         LogFlush();

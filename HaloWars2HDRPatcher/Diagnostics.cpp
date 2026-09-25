@@ -101,7 +101,14 @@ void ReportMitigations(const MitigationReport& report) {
     Info(L"    StrictMode ..................... %s", YesNo(report.cfgStrict));
 }
 
-std::wstring InjectionVerdict(const MitigationReport& report) {
+bool AcgBlocksPayload(const MitigationReport& report, const std::wstring& dllPath) {
+    Strategy strategy = kDefaultStrategy;
+    return report.queried && report.prohibitDynamicCode &&
+           StrategyOfPath(dllPath, &strategy) && strategy == Strategy::Callsite;
+}
+
+std::wstring InjectionVerdict(const MitigationReport& report,
+                              const std::wstring& dllPath) {
     if (!report.queried) {
         return L"Could not read the process mitigation policies. No verdict.";
     }
@@ -116,6 +123,13 @@ std::wstring InjectionVerdict(const MitigationReport& report) {
     std::wstring verdict =
         L"INJECTABLE: MicrosoftSignedOnly is not set, so a remote LoadLibraryW is "
         L"permitted.";
+
+    if (AcgBlocksPayload(report, dllPath)) {
+        verdict +=
+            L"  But Arbitrary Code Guard IS set, and it refuses what the Callsite "
+            L"payload does: make one of the game's code pages writable. It will load "
+            L"and its install will fail; choose the Vtable or QI strategy.";
+    }
 
     if (report.disableExtensionPoints) {
         verdict +=

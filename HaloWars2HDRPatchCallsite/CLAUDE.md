@@ -1,6 +1,7 @@
 # HaloWars2HDRPatchCallsite
 
-The call-site payload. It rewrites the host's own call instructions, so nothing
+The call-site payload, and the launcher's default. It rewrites the host's own
+call instructions, so nothing
 of DXGI's is modified — not its image, not its vtables — and DXGI's internal
 calls never reach a hook. The repository's root CLAUDE.md applies here too;
 this file is only what is specific to this payload.
@@ -8,10 +9,11 @@ this file is only what is specific to this payload.
 ## What the call-site patch depends on
 
 - **The launcher freezes every game thread for the install**, which is the only
-  reason rewriting an instruction in the host is safe. That holds for the
-  default argument route only: on the environment route `DllMain` installs on
-  its own thread and the launcher resumes the game without waiting, so there
-  the rewrite races the host's startup. Nothing may move the patch later.
+  reason rewriting an instruction in the host is safe. Both launcher routes do
+  — the env-var route waits on the install event — but another injector
+  would not, and then the rewrite races the host's startup. Suspending the
+  other threads around the writes alone would close that; it is not built.
+  Nothing may move the patch later.
 - **A slot below 16 is reached with an 8-bit displacement**, three bytes, and
   the replacement needs six. `Present` (8), `ResizeBuffers` (13) and
   `GetContainingOutput` (15) therefore cannot be redirected in place and are
@@ -22,8 +24,8 @@ this file is only what is specific to this payload.
   gets redirected; the dispatcher accepts our target because this DLL is not a
   CFG image. The launcher's mitigation report prints whether the host has CFG.
 - **Arbitrary Code Guard would block it**, since it refuses to make a code page
-  writable. The launcher reports ACG for that reason, and the payload logs a
-  refusal rather than failing quietly.
+  writable. The launcher's verdicts say so whenever ACG is set and the chosen
+  DLL is this one, and the payload logs a refusal rather than failing quietly.
 - **A displacement identifies nothing.** Measured: **244** call sites reach
   `+0xD8` (1053 before ordinary stack loads were excluded), **139** reach
   `+0x128`, **57** reach `+0x130`. Requiring the `GetCurrentBackBufferIndex`

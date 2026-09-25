@@ -3,10 +3,13 @@
 #include "Launcher.h"
 
 #include <psapi.h>
+#include <sddl.h>
+#include <userenv.h>
 #include <algorithm>
 #include <cwctype>
 
 #pragma comment(lib, "psapi.lib")
+#pragma comment(lib, "userenv.lib")
 
 namespace launcher {
 namespace {
@@ -299,6 +302,80 @@ bool RunRemoteInstall(HANDLE process, const std::wstring& dllPath,
 
     Info(L"  Install ........ hooks confirmed in place before resume");
     return true;
+}
+
+HANDLE CreateInstallEvent(HANDLE process, DWORD pid)
+{
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(process, TOKEN_QUERY, &token))
+    {
+        Warn(L"  Install event .. cannot read the game's token: %lu", GetLastError());
+        return nullptr;
+    }
+
+    alignas(TOKEN_APPCONTAINER_INFORMATION)
+        BYTE buffer[sizeof(TOKEN_APPCONTAINER_INFORMATION) + SECURITY_MAX_SID_SIZE] = {};
+    DWORD length = 0;
+    const BOOL queried =
+        GetTokenInformation(token, TokenAppContainerSid, buffer, sizeof(buffer), &length);
+    const DWORD queryError = GetLastError();
+    CloseHandle(token);
+    if (!queried)
+    {
+        Warn(L"  Install event .. cannot read the game's AppContainer: %lu", queryError);
+        return nullptr;
+    }
+
+    std::wstring name = kInstallEventPrefix + std::to_wstring(pid);
+
+    // Inside an AppContainer an unqualified name resolves to the container's own
+    // directory, so the event has to be made there for the payload to find it.
+    const PSID container =
+        reinterpret_cast<TOKEN_APPCONTAINER_INFORMATION*>(buffer)->TokenAppContainer;
+    if (container != nullptr)
+    {
+        wchar_t path[MAX_PATH] = {};
+        ULONG pathLength = 0;
+        if (!GetAppContainerNamedObjectPath(nullptr, container, MAX_PATH, path,
+                                            &pathLength))
+        {
+            Warn(L"  Install event .. GetAppContainerNamedObjectPath failed: %lu",
+                 GetLastError());
+            return nullptr;
+        }
+        name = std::wstring(path) + L"\\" + name;
+    }
+
+    // SetEvent from inside the sandbox must pass both halves of an AppContainer
+    // access check - Everyone, and ALL APPLICATION PACKAGES - and a low label,
+    // because the game runs at low integrity.
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            L"D:(A;;0x100002;;;WD)(A;;0x100002;;;AC)S:(ML;;NW;;;LW)", SDDL_REVISION_1,
+            &descriptor, nullptr))
+    {
+        Warn(L"  Install event .. cannot build its security descriptor: %lu",
+             GetLastError());
+        return nullptr;
+    }
+
+    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), descriptor, FALSE};
+    const HANDLE event = CreateEventExW(&attributes, name.c_str(),
+                                        CREATE_EVENT_MANUAL_RESET,
+                                        SYNCHRONIZE | EVENT_MODIFY_STATE);
+    const DWORD createError = GetLastError();
+    LocalFree(descriptor);
+
+    if (event == nullptr)
+    {
+        Warn(L"  Install event .. cannot create %s: %lu", name.c_str(), createError);
+        return nullptr;
+    }
+    if (createError == ERROR_ALREADY_EXISTS)
+    {
+        ResetEvent(event);   // left by an earlier game that had this pid
+    }
+    return event;
 }
 
 // Only the foreground process may give the foreground away, which the launcher

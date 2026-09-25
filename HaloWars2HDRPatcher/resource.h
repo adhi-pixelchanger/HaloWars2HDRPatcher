@@ -20,6 +20,8 @@
 #define IDC_GO                      1105
 #define IDC_TESTING                 1106
 #define IDC_MAINMODE                1109
+#define IDC_STRATEGYLABEL           1110
+#define IDC_MAINSTRATEGY            1111
 
 // --- advanced dialog: target and payload ----------------------------------
 #define IDC_PACKAGE                 1001
@@ -32,6 +34,7 @@
 
 // --- advanced dialog: hook DLL configuration ------------------------------
 #define IDC_MODE                    1030
+#define IDC_STRATEGY                1031
 #define IDC_HOOKSLOG                1036
 #define IDC_LOGTOFILE               1037
 #define IDC_DEFAULTS                1038

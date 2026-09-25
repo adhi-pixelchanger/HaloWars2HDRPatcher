@@ -6,12 +6,14 @@ AppContainer DX12 title, `Microsoft.HoganThreshold_..._8wekyb3d8bbwe`, exe
 `HaloWars2_WinAppDX12Final`. Package filter is `HoganThreshold`, not
 `HaloWars2`. Payload logs land in `%LOCALAPPDATA%\Packages\<family>\AC\Temp\`.
 
-The payloads apply the same fix and differ only in how they intercept DXGI:
+The payloads apply the same fix and differ only in how they intercept DXGI.
+The launcher's Strategy dropdown picks one, and its items are the DLL
+suffixes:
 
 | project | DLL | intercepts by |
 | --- | --- | --- |
-| `HaloWars2HDRPatchVtable/` | `HaloWars2HDRPatchVtable.dll` | patching DXGI's vtables; the launcher's default |
-| `HaloWars2HDRPatchCallsite/` | `HaloWars2HDRPatchCallsite.dll` | rewriting the host's own call sites |
+| `HaloWars2HDRPatchVtable/` | `HaloWars2HDRPatchVtable.dll` | patching DXGI's vtables |
+| `HaloWars2HDRPatchCallsite/` | `HaloWars2HDRPatchCallsite.dll` | rewriting the host's own call sites; the launcher's default |
 | `HaloWars2HDRPatchQI/` | `HaloWars2HDRPatchQI.dll` | handing the host proxy DXGI objects |
 
 What they have in common — config, logging, the Bink gate, import patching,
@@ -75,6 +77,10 @@ you: standing rules, and things measured on the testing machine.
   be able to drive this DLL with nothing but `LoadLibrary` — no export name, no
   argument, no knowledge of internals. That is the whole reason `HW2HDRPATCH`
   and the `DllMain` self-install exist; the argument route stays the default.
+  Our launcher's env-var route still keeps the game frozen through the install:
+  it creates `HaloWars2HDRPatch.InstallComplete.<pid>` before the load, and the
+  DLL sets it when `InstallOnce` finishes, success or not. Any other injector
+  creates no such event, so its load races the host's startup.
 - **`kBinkModule` is a constant, not a setting.** Halo Wars 2 ships exactly one
   Bink DLL and the name was *discovered* from the running process — nobody
   chose it. HW2 has no DLL plugins that touch Bink, which is also why watching
@@ -307,6 +313,13 @@ compare against and the interceptor looked guilty by coincidence.
 - `IDC_STATIC` is `-1`, so `GetDlgItem(dialog, -1)` cannot pick one static out
   of several. Anything `LayoutView` shows or hides needs a real control id.
 - `StatusIcon.h` needs `NOMINMAX` before `windows.h`.
+- **The install event is the launcher's to create, in the game's namespace.**
+  Inside an AppContainer an unqualified object name resolves to the
+  container's own directory, so the launcher makes it at the path
+  `GetAppContainerNamedObjectPath` gives. The sandbox can only set it with an
+  ACE for Everyone *and* one for ALL APPLICATION PACKAGES, plus a low
+  integrity label. The DLL does not create it because the launcher would then
+  have to poll for it.
 - **`dllmain.cpp` is compiled into each DLL, not into the shared library.** From
   a `.lib`, nothing pulls it in before the CRT's own default `DllMain` stub
   satisfies the reference, so the linker drops it and the DLL builds cleanly

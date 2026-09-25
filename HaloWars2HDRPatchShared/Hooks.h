@@ -41,6 +41,10 @@ constexpr const wchar_t* kBinkModule = L"bink2winrt_x64.uni10.dll";
 #define HW2HDRPATCH_ENV_NAME L"HW2HDRPATCH"
 constexpr const wchar_t* kEnvVarName = HW2HDRPATCH_ENV_NAME;
 
+// The launcher's env-var route creates this event, the pid appended, and waits
+// on it before resuming the game. Launcher.h carries the same text.
+constexpr const wchar_t* kInstallEventPrefix = L"HaloWars2HDRPatch.InstallComplete.";
+
 extern Config g_config;
 
 // --- lifecycle ------------------------------------------------------------

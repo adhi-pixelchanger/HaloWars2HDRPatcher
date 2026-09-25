@@ -1,6 +1,6 @@
 # HaloWars2HDRPatchVtable
 
-The vtable payload, and the launcher's default. It patches slots in dxgi.dll's
+The vtable payload. It patches slots in dxgi.dll's
 own vtables, reached from the factory the host creates. The repository's root
 CLAUDE.md applies here too; this file is only what is specific to this payload.
 

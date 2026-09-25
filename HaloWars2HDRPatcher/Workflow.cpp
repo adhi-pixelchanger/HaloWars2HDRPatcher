@@ -184,6 +184,14 @@ std::wstring BuildVerdict(const RunResult& result, bool payloadLoaded) {
                L"is actually true.";
     }
 
+    // Loading proves nothing here: the install that follows is what ACG refuses.
+    if (payloadLoaded && AcgBlocksPayload(m, result.payloadPath)) {
+        return L"BLOCKED for the Callsite strategy: the payload loaded, but "
+               L"Arbitrary Code Guard is set on this process and refuses the code "
+               L"patch Callsite needs, so its install fails. Choose the Vtable or QI "
+               L"strategy, which write only data.";
+    }
+
     if (payloadLoaded) {
         return L"SUCCESS: the payload is loaded in the game process and appears in "
                L"its module list.";
@@ -288,7 +296,7 @@ RunResult Run(const RunOptions& options) {
     result.mitigations = QueryMitigations(process);
     ReportMitigations(result.mitigations);
 
-    const std::wstring policyVerdict = InjectionVerdict(result.mitigations);
+    const std::wstring policyVerdict = InjectionVerdict(result.mitigations, dllPath);
     if (!policyVerdict.empty()) {
         Blank();
         Info(L"  %s", policyVerdict.c_str());
@@ -296,6 +304,12 @@ RunResult Run(const RunOptions& options) {
 
     // --- payload ----------------------------------------------------------
     Rule(L"payload injection");
+
+    // Before the load, so it already exists when the payload's self-install
+    // finishes and looks for it.
+    const bool envRoute = options.useEnvironmentConfig && envConfig.active;
+    HANDLE installEvent = envRoute ? CreateInstallEvent(process, pid) : nullptr;
+
     DWORD remoteResult = 0;
     InjectDll(process, dllPath, &remoteResult);
 
@@ -307,14 +321,22 @@ RunResult Run(const RunOptions& options) {
          payloadLoaded ? L"PRESENT - the DLL is mapped"
                        : L"ABSENT - the DLL is not mapped");
 
-    if (payloadLoaded && options.useEnvironmentConfig && envConfig.active) {
+    if (payloadLoaded && envRoute) {
         // Deliberately no call into the payload: LoadLibraryW is all a foreign
         // injector would do, and DllMain has already started the install off the
-        // environment variable. The cost is that there is no signal to wait on,
-        // so the hooks are racing the host's startup from here rather than being
-        // confirmed in place before the resume.
-        Info(L"  Install ........ left to the payload's own HW2HDRPATCH path; no "
-             L"signal to wait on, so it is not confirmed before resume.");
+        // environment variable. It sets installEvent when done, so the game stays
+        // frozen through the install just as on the argument route. The 30 s is
+        // a watchdog only; nothing is sequenced by it.
+        if (installEvent == nullptr) {
+            Warn(L"  Install ........ no install event to wait on, so it is not "
+                 L"confirmed before resume.");
+        } else if (WaitForSingleObject(installEvent, 30000) == WAIT_OBJECT_0) {
+            Info(L"  Install ........ finished before resume; the hook log has the "
+                 L"result.");
+        } else {
+            Fail(L"  Install ........ not signalled within 30 s. Resuming anyway; "
+                 L"check the hook log for the last step it reached.");
+        }
     } else if (payloadLoaded) {
         // envConfig.active is false here only if the variable could not be set,
         // in which case the environment route has nothing to read and would
@@ -326,6 +348,8 @@ RunResult Run(const RunOptions& options) {
         result.injected =
             RunRemoteInstall(process, dllPath, BuildHooksArgs(options.hooks));
     }
+
+    if (installEvent != nullptr) CloseHandle(installEvent);
 
     if (suspended) {
         ResumeProcess(process);
@@ -355,10 +379,35 @@ RunResult Run(const RunOptions& options) {
 
 namespace launcher {
 
+const wchar_t* StrategyName(Strategy strategy) {
+    switch (strategy) {
+        case Strategy::Vtable:   return L"Vtable";
+        case Strategy::Callsite: return L"Callsite";
+        case Strategy::QI:       return L"QI";
+    }
+    return L"Vtable";
+}
+
+std::wstring StrategyDllPath(Strategy strategy) {
+    return ExecutableDirectory() + L"\\HaloWars2HDRPatch" + StrategyName(strategy) +
+           L".dll";
+}
+
+bool StrategyOfPath(const std::wstring& path, Strategy* strategy) {
+    const std::wstring file = FileNameOf(path);
+    for (Strategy candidate : kStrategies) {
+        if (_wcsicmp(file.c_str(), FileNameOf(StrategyDllPath(candidate)).c_str()) == 0) {
+            *strategy = candidate;
+            return true;
+        }
+    }
+    return false;
+}
+
 RunOptions DefaultRunOptions() {
     RunOptions options;
     options.packageNeedle = L"HoganThreshold";
-    options.dllPath = ExecutableDirectory() + L"\\HaloWars2HDRPatchVtable.dll";
+    options.dllPath = StrategyDllPath(kDefaultStrategy);
 
     options.hooks = HooksConfig();
     return options;

@@ -59,6 +59,21 @@ void Check(HWND dialog, int id, bool on) {
     CheckDlgButton(dialog, id, on ? BST_CHECKED : BST_UNCHECKED);
 }
 
+void FillStrategies(HWND dialog, int id) {
+    for (Strategy strategy : kStrategies) {
+        SendDlgItemMessageW(dialog, id, CB_ADDSTRING, 0,
+                            reinterpret_cast<LPARAM>(StrategyName(strategy)));
+    }
+}
+
+// Nothing is picked only when the advanced panel's DLL path names another file.
+Strategy SelectedStrategy(HWND dialog, int id) {
+    const LRESULT index = SendDlgItemMessageW(dialog, id, CB_GETCURSEL, 0, 0);
+    return (index >= 0 && index < static_cast<LRESULT>(_countof(kStrategies)))
+               ? kStrategies[index]
+               : kDefaultStrategy;
+}
+
 void LogSink(const wchar_t* line, void* /*user*/) {
     if (g_sinkWindow == nullptr) return;
     PostMessageW(g_sinkWindow, WM_APP_LOG, 0,
@@ -231,11 +246,21 @@ void CopyReport(HWND dialog) {
     CloseClipboard();
 }
 
+// The strategy whose DLL the path names, or none for any other file.
+void SyncStrategyToPath(HWND dialog) {
+    Strategy strategy = kDefaultStrategy;
+    const bool known = StrategyOfPath(GetText(dialog, IDC_DLLPATH), &strategy);
+    SendDlgItemMessageW(dialog, IDC_STRATEGY, CB_SETCURSEL,
+                        known ? static_cast<WPARAM>(strategy) : static_cast<WPARAM>(-1),
+                        0);
+}
+
 void ApplyDefaults(HWND dialog) {
     const RunOptions defaults = DefaultRunOptions();
 
     SetText(dialog, IDC_PACKAGE, defaults.packageNeedle);
     SetText(dialog, IDC_DLLPATH, defaults.dllPath);
+    SyncStrategyToPath(dialog);
     WriteHooksBoxes(dialog, defaults.hooks);
     ResolveTargetFields(dialog);
 }
@@ -257,6 +282,7 @@ INT_PTR CALLBACK TestingProc(HWND dialog, UINT message, WPARAM wParam,
                 SendDlgItemMessageW(dialog, IDC_MODE, CB_ADDSTRING, 0,
                                     reinterpret_cast<LPARAM>(item));
             }
+            FillStrategies(dialog, IDC_STRATEGY);
 
             RefreshPackages(dialog);
             ApplyDefaults(dialog);
@@ -306,6 +332,19 @@ INT_PTR CALLBACK TestingProc(HWND dialog, UINT message, WPARAM wParam,
                     }
                     return TRUE;
 
+                // Each follows the other; CB_SETCURSEL sends no notification,
+                // so this cannot loop.
+                case IDC_STRATEGY:
+                    if (HIWORD(wParam) == CBN_SELENDOK) {
+                        SetText(dialog, IDC_DLLPATH,
+                                StrategyDllPath(SelectedStrategy(dialog, IDC_STRATEGY)));
+                    }
+                    return TRUE;
+
+                case IDC_DLLPATH:
+                    if (HIWORD(wParam) == EN_CHANGE) SyncStrategyToPath(dialog);
+                    return TRUE;
+
                 case IDC_HOOKSLOG:
                     if (HIWORD(wParam) == BN_CLICKED) {
                         WriteHooksBoxes(dialog, ReadHooksBoxes(dialog));
@@ -351,14 +390,14 @@ bool g_testingVisible = false;
 
 // Hidden when the advanced panel shows, so each needs a real id.
 constexpr int kSimpleControls[] = {
-    IDC_HEADLINE, IDC_MODELABEL, IDC_MAINMODE, IDC_STATUSICON,
-    IDC_STATUSTEXT, IDC_STATUSDETAIL, IDC_GO, IDC_TESTING};
+    IDC_HEADLINE, IDC_MODELABEL, IDC_MAINMODE, IDC_STRATEGYLABEL, IDC_MAINSTRATEGY,
+    IDC_STATUSICON, IDC_STATUSTEXT, IDC_STATUSDETAIL, IDC_GO, IDC_TESTING};
 
 // Only IDD_MAIN's size is duplicated here. The panel's is measured instead,
 // because the two templates use different fonts and a dialog unit is therefore
 // not the same number of pixels in each.
 constexpr int kSimpleClientWidth = 200;    // IDD_MAIN's width
-constexpr int kSimpleClientHeight = 186;   // IDD_MAIN's height
+constexpr int kSimpleClientHeight = 216;   // IDD_MAIN's height
 
 constexpr int kPanelTop = 4;
 constexpr int kBottomMargin = 8;
@@ -441,6 +480,9 @@ INT_PTR CALLBACK SimpleProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
                                     ? kModeItemSdr
                                     : kModeItemHdr,
                                 0);
+            FillStrategies(dialog, IDC_MAINSTRATEGY);
+            SendDlgItemMessageW(dialog, IDC_MAINSTRATEGY, CB_SETCURSEL,
+                                static_cast<WPARAM>(kDefaultStrategy), 0);
 
             g_testingPanel = CreateDialogParamW(
                 g_instance, MAKEINTRESOURCEW(IDD_TESTING), dialog, TestingProc, 0);
@@ -517,6 +559,8 @@ INT_PTR CALLBACK SimpleProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
 
                     RunOptions options = DefaultRunOptions();
                     options.hooks.mode = SelectedMainMode(dialog);
+                    options.dllPath =
+                        StrategyDllPath(SelectedStrategy(dialog, IDC_MAINSTRATEGY));
                     if (!StartJob(dialog, options)) {
                         EnableWindow(GetDlgItem(dialog, IDC_GO), TRUE);
                         EnableWindow(GetDlgItem(dialog, IDC_TESTING), TRUE);
