@@ -1,44 +1,29 @@
 # HaloWars2HDRPatch
 
 Halo Wars 2's mission briefing videos render almost black when Windows HDR is
-on. This fixes them, with HDR left on.
-
-## Install
-
-Copy these files into a short folder you own, such as `C:\HaloWars2HDRPatch\`:
-
-```
-HaloWars2HDRPatcher.exe
-HaloWars2HDRPatchVtable.dll
-HaloWars2HDRPatchCallsite.dll
-HaloWars2HDRPatchQI.dll
-```
-
-Only the DLL your chosen strategy names is needed; the default is Callsite.
-
-Avoid OneDrive and deep user-profile paths. If the files came out of a ZIP,
-right-click each one, Properties, **Unblock**.
+on. This fixes them, with HDR left on in Windows, but giving you the option
+to still play HW2 in either SDR or HDR.
 
 ## Run
 
-Start `HaloWars2HDRPatcher.exe` **as a normal user**, not as administrator —
-Windows will not launch Store apps from an elevated process.
+Extract all and start `HaloWars2HDRPatcher.exe`.
 
 Pick a mode and press **Launch Halo Wars 2**:
 
 - **HDR** (default) — fixes the briefing videos; the rest of the game keeps HDR.
-- **SDR** — the whole session runs in SDR. Try it if HDR mode does not work.
+- **SDR** — the whole session runs in SDR.
 
-**Strategy** picks how the patch hooks the game — Vtable, Callsite or QI. All
-three apply the same fix; leave it on Callsite unless that one does not work.
+**Strategy** auto-picks how the patch hooks the game — Vtable, Callsite or QueryInterface,
+based on detected Windows permissions.  If one strategy fails to work on your PC, 
+manually set a different one.
 
 The indicator turns green once the patch is in, and the game takes the
 foreground. You can close the launcher; the game keeps running.
 
-Everything under **Advanced** is for troubleshooting.
+Everything under **Advanced** is for troubleshooting, logging requires a debug build,
+this project was built with VS 2026.
 
 ## Notes
 
 - Skipping a cinematic can leave stale frames in the bars beside the next
-  video. That is a game bug and happens without this tool.
-- Most of this code was written by Claude.
+  video. That is a game bug with HDR and happens without this tool.
