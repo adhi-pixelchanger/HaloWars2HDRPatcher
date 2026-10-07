@@ -41,3 +41,4 @@ Everything under **Advanced** is for troubleshooting.
 
 - Skipping a cinematic can leave stale frames in the bars beside the next
   video. That is a game bug and happens without this tool.
+- Most of this code was written by Claude.

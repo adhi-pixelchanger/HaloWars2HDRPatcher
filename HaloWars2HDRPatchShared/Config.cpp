@@ -1,19 +1,4 @@
 // Config.cpp - configuration, logging, and wiring the modes together.
-//
-// Config is one flat '|'-separated key=value string rather than a struct, so the
-// EXE and DLL share no layout. Byte-identical whichever way it arrives:
-//
-//   1. the LPVOID handed to HaloWars2HDRPatchInstall, written into this process
-//      by our launcher
-//   2. the HW2HDRPATCH environment variable
-//   3. compiled-in defaults
-//
-// Form (2) is what lets any injector drive this DLL with nothing but
-// LoadLibrary: DllMain self-installs when the variable is present.
-//
-// The DLL cannot write next to itself: its directory is granted read/execute
-// only. GetTempPathW in a packaged process resolves to the package's own
-// writable temp folder.
 
 #include "Hooks.h"
 
@@ -38,8 +23,6 @@ const wchar_t* ModeName(Mode mode)
     return mode == Mode::Sdr ? L"SDR (whole session)" : L"HDR (movies only)";
 }
 
-// Caps guard against a caller that is not our launcher handing us something
-// that is not one of our lists.
 constexpr size_t kMaxTokens = 32;
 constexpr size_t kMaxTokenChars = 512;
 
@@ -69,10 +52,9 @@ void ParseArgs(const wchar_t* args)
                                  : wcsnlen(args, kMaxTokenChars);
         if (length >= kMaxTokenChars)
         {
-            break;   // not a list we wrote
+            break;
         }
 
-        // Copied out so the value is NUL-terminated for the comparisons below.
         wchar_t token[kMaxTokenChars];
         wmemcpy(token, args, length);
         token[length] = L'\0';
@@ -102,7 +84,6 @@ void ParseArgs(const wchar_t* args)
         args = separator + 1;
     }
 
-    // logToFile is meaningless without log, whatever order the keys arrived in.
     if (!g_config.log)
     {
         g_config.logToFile = false;
@@ -126,7 +107,6 @@ void LoadConfig(const wchar_t* args)
         return;
     }
 
-    // No explicit list: the environment holds the identical text, then defaults.
     const DWORD length = GetEnvironmentVariableW(kEnvVarName, nullptr, 0);
     if (length <= 1 || length > kMaxTokens * kMaxTokenChars)
     {
@@ -146,7 +126,6 @@ void LoadConfig(const wchar_t* args)
 SRWLOCK g_logLock = SRWLOCK_INIT;
 std::unique_ptr<std::wofstream> g_logFile;
 
-// The compile-time switch removes this whole block and every call site.
 void LogNoop(const wchar_t* /*format*/, ...) {}
 void LogImpl(const wchar_t* format, ...);
 
@@ -159,8 +138,6 @@ void InitLog()
         g_startTick = GetTickCount64();
     }
 
-    // LogImpl never re-checks g_config.log - that is the point of swapping
-    // the pointer rather than branching per call.
     if (!g_config.log)
     {
         return;
@@ -170,7 +147,7 @@ void InitLog()
 
     if (!g_config.logToFile)
     {
-        return;  // debugger output only
+        return;
     }
 
     wchar_t temp[MAX_PATH] = {};
@@ -218,7 +195,6 @@ void LogFlush()
 
 #else  // !HW2HDRPATCH_LOGGING
 
-// g_config.log/logToFile are dead in this build.
 void InitLog()
 {
 }
@@ -230,8 +206,7 @@ SRWLOCK g_installLock = SRWLOCK_INIT;
 namespace
 {
 
-// The launcher's env-var route resumes the game only once this is set. No event
-// means nobody is waiting: the argument route, or another injector.
+// The launcher's env-var route resumes the game only once this is set.
 void SignalInstallComplete()
 {
     wchar_t name[96] = {};
@@ -254,8 +229,6 @@ void SignalInstallComplete()
 
 }  // namespace
 
-// Both activation paths land here, possibly both for one process. The lock makes
-// a second caller wait; the flag makes it a no-op returning the same answer.
 DWORD InstallOnce(const wchar_t* args)
 {    
     AutoSRWLockExclusive installLock(g_installLock);
@@ -287,7 +260,7 @@ DWORD InstallOnce(const wchar_t* args)
     {
         Log(L"[!] install failed; host unmodified");
         LogFlush();
-        return result;   // still 0
+        return result;
     }
 
     Log(L"install complete");

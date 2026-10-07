@@ -48,8 +48,11 @@ you: standing rules, and things measured on the testing machine.
   line hides the repeats, and the repeat counts are the data. Measured: 42 fps
   through a gated movie either way. A session is tens of thousands of lines.
 - **No timing.** No sleeps, no frame counts, no deadlines that anything is
-  sequenced by, no polling heuristics. Hook the event. (A watchdog whose expiry
-  only turns a hang into a diagnosable failure is fine and is not this.)
+  sequenced by, no polling heuristics. Hook the event. Two things are not this:
+  a watchdog whose expiry only turns a hang into a diagnosable failure, and the
+  launcher's short retry when Windows returns `ERROR_PARTIAL_COPY` for a
+  just-created process's module list. That one works around how Windows reads
+  a new process, not a guess about the game's timing.
 - **The DLL owns no persistent threads.** Nothing may outlive install: a
   lasting thread would have to be stopped from `DLL_PROCESS_DETACH`, which runs
   under the loader lock, so it could not be joined.
@@ -90,7 +93,10 @@ you: standing rules, and things measured on the testing machine.
 
 ## Measured on the testing machine
 
-### The working configuration is the descriptor lie alone
+### The working configuration is the descriptor lie, without a downgrade
+
+The fix is the `GetDesc1` lie plus the `CheckColorSpaceSupport` override that
+SDR mode needs (below); nothing touches `SetColorSpace1`.
 
 | configuration | result |
 | --- | --- |
@@ -120,7 +126,9 @@ its own `SetColorSpace1(SDR)`, all on the first poll after the gate opens. The
 ```
 
 The `SetColorSpace1` downgrade was removed: it never fired, in HDR or SDR mode,
-because by the time the gate is open the host has already asked for SDR itself.
+because while the gate is open the host never asks for HDR. In HDR mode it
+re-decides from the lie and asks for SDR; in SDR mode the
+`CheckColorSpaceSupport` override stops its one HDR request.
 An older build measured the lie alone as black, but that one drove
 `SetColorSpace1` from `Present` and so pre-empted the host.
 
@@ -164,12 +172,14 @@ not spot-checked.
 
 ### The host's whole path through DXGI
 
-Every route the host takes, from a Debug session. Anything not here, it never
-did; DXGI's own `GetDesc1` calls, above, are not part of it.
+How the host reaches DXGI's objects, from a Debug session; among those routes,
+anything not here it never took. The colour-space calls the fix answers are
+covered above, and DXGI's own `GetDesc1` calls are not part of it.
 
 - `CreateDXGIFactory1` (eight times a session) and `CreateDXGIFactory2` (once).
-  Plain `CreateDXGIFactory` is **not in its import table** — the patch reports
-  two slots, not three. It asks for `IDXGIFactory`, `1`, `4`, `5`.
+  Plain `CreateDXGIFactory` is **not in its import table** — an earlier build
+  that patched all three found only two, which is why no payload lists it now.
+  It asks for `IDXGIFactory`, `1`, `4`, `5`.
 - One swap chain, always `CreateSwapChainForCoreWindow`: `3440x1360`,
   `R10G10B10A2_UNORM`, 2 buffers, flags `0x800`, flip-discard.
 - **Per frame, exactly this: `GetContainingOutput` → QI `IDXGIOutput6` →
@@ -275,8 +285,8 @@ compare against and the interceptor looked guilty by coincidence.
   37 entries), so that is not the blocker; the ACL is. It would also modify the
   installed package, which this project does not do.
 - **Relabelling the swap chain alone** for the span of playback. Measured black.
-- **A swap-chain downgrade in `SetColorSpace1`.** It never fires: by the time
-  the gate is open the host has already asked for SDR itself.
+- **A swap-chain downgrade in `SetColorSpace1`.** It never fires: while the
+  gate is open the host never asks for HDR.
 - **Converting Bink's planes**, in place or through shadow planes. In place it
   poisons Bink 2's prediction (frame N is motion-compensated from N-1); shadow
   planes fixed that and still ran into the 200x arithmetic above.

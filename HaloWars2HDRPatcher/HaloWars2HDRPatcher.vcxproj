@@ -111,9 +111,10 @@
   </ItemGroup>
 
 
-  <!-- No ProjectReference: linking the DLL's import library into this EXE is
-       both unnecessary (the DLL is loaded by the target process, never by us)
-       and a link error. Build order is expressed as a dependency in the .sln. -->
+  <!-- No ProjectReference: linking a payload's import library into this EXE is
+       both unnecessary (the payloads run in the game; the launcher only maps one
+       to read its export) and a link error. Build order is expressed as
+       dependencies in the .sln. -->
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

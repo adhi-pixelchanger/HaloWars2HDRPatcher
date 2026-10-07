@@ -1,10 +1,4 @@
 // Security.cpp - AppContainer file permissions.
-//
-// Without read/execute for S-1-15-2-1 (ALL APPLICATION PACKAGES), LoadLibraryW
-// inside the game fails with ERROR_ACCESS_DENIED, which reaches the launcher as
-// a remote thread exit code of 0 and nothing else - hence the check as well as
-// the grant. Granted on the directory, inheritable, so it is needed once per
-// deploy folder rather than once per file.
 
 #include "Launcher.h"
 
@@ -93,8 +87,6 @@ bool GrantAppContainerAccess(const std::wstring& path, bool isDirectory) {
     return ok;
 }
 
-// Requires read AND execute: an allow ACE with some other mask is not enough
-// to map the DLL.
 bool HasAppContainerReadAccess(const std::wstring& path) {
     PACL dacl = nullptr;
     PSECURITY_DESCRIPTOR descriptor = nullptr;
@@ -119,8 +111,6 @@ bool HasAppContainerReadAccess(const std::wstring& path) {
                 continue;
             }
 
-            // Inherited ACEs carry mapped specific rights; freshly written
-            // ones may still carry the generic bits.
             const DWORD specific = FILE_READ_DATA | FILE_EXECUTE;
             const bool hasSpecific = (ace->Mask & specific) == specific;
             const bool hasGeneric =

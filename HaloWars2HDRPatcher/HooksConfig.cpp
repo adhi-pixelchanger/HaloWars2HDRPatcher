@@ -1,13 +1,4 @@
 // HooksConfig.cpp - the configuration handed to the hook DLL.
-//
-// One flat '|'-separated key=value string, deliberately not a struct: the EXE
-// and DLL then share no layout, only the key names, and neither has to include
-// a header from the other. The same text serves both delivery routes - written
-// into the game for the installer argument, or set as HW2HDRPATCH.
-//
-// '|' rather than a comma because GateFilter holds path substrings and '|'
-// cannot legally appear in a Windows path. The DLL hard-codes the same one
-// character; that duplication is the price of sharing no header.
 
 #include "Launcher.h"
 
@@ -34,7 +25,6 @@ std::wstring BuildHooksArgs(const HooksConfig& config)
     append(L"GateFilter", config.gateFilter);
     append(L"Log", config.log ? L"1" : L"0");
 
-    // Mirrors what the DLL enforces anyway, so the two cannot disagree.
     append(L"LogToFile", (config.log && config.logToFile) ? L"1" : L"0");
 
     return args;

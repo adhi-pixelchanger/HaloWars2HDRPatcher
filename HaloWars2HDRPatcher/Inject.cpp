@@ -83,8 +83,6 @@ std::vector<std::wstring> EnumerateModules(HANDLE process) {
             }
             return modules;
         }
-        // A freshly created AppContainer process can return ERROR_PARTIAL_COPY
-        // while its module list is still being built.
         Sleep(50);
     }
     return modules;
@@ -118,8 +116,6 @@ bool InjectDll(HANDLE process, const std::wstring& dllPath, DWORD* remoteResult)
         return false;
     }
 
-    // kernel32.dll is mapped at the same base in every process for a given boot,
-    // so our local address of LoadLibraryW is valid in the target.
     const HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
     auto loadLibrary = reinterpret_cast<LPTHREAD_START_ROUTINE>(
         reinterpret_cast<void*>(GetProcAddress(kernel32, "LoadLibraryW")));
@@ -154,9 +150,6 @@ bool InjectDll(HANDLE process, const std::wstring& dllPath, DWORD* remoteResult)
         return false;
     }
 
-    // On x64 the HMODULE is truncated to 32 bits in the thread exit code, so a
-    // non-zero value only tells us the load succeeded, not where it landed. The
-    // authoritative check is the module list, done by the caller.
     if (exitCode == 0) {
         Fail(L"Remote LoadLibraryW returned NULL for %s.",
              FileNameOf(dllPath).c_str());
@@ -166,8 +159,6 @@ bool InjectDll(HANDLE process, const std::wstring& dllPath, DWORD* remoteResult)
     return true;
 }
 
-// The remote LoadLibraryW thread's exit code cannot give us this: it is a DWORD
-// and an x64 HMODULE does not fit.
 HMODULE RemoteModuleBase(HANDLE process, const std::wstring& fileName)
 {
     const std::wstring wanted = ToLower(fileName);
@@ -208,8 +199,6 @@ bool RunRemoteInstall(HANDLE process, const std::wstring& dllPath,
         return false;
     }
 
-    // DONT_RESOLVE_DLL_REFERENCES runs no DllMain and binds no imports, so this
-    // installs nothing into the launcher.
     const HMODULE local =
         LoadLibraryExW(dllPath.c_str(), nullptr, DONT_RESOLVE_DLL_REFERENCES);
     if (local == nullptr)
@@ -233,14 +222,12 @@ bool RunRemoteInstall(HANDLE process, const std::wstring& dllPath,
         return false;
     }
 
-    // Same image, so the same offset from whichever base each process used.
     auto remoteEntry = reinterpret_cast<LPTHREAD_START_ROUTINE>(
         reinterpret_cast<void*>(reinterpret_cast<BYTE*>(remoteBase) + rva));
 
     LPVOID remoteArgs = nullptr;
     if (!configArgs.empty())
     {
-        // +1 for the terminator: the payload reads this as a C string.
         const SIZE_T bytes = (configArgs.size() + 1) * sizeof(wchar_t);
         remoteArgs = VirtualAllocEx(process, nullptr, bytes, MEM_COMMIT | MEM_RESERVE,
                                     PAGE_READWRITE);
@@ -250,7 +237,6 @@ bool RunRemoteInstall(HANDLE process, const std::wstring& dllPath,
                                    &written)
             || written != bytes)
         {
-            // Not fatal: the installer treats a null list as "use the defaults".
             Warn(L"  Could not write the hook configuration into the game (%lu); "
                  L"the payload will use its compiled-in defaults.",
                  GetLastError());
@@ -271,16 +257,14 @@ bool RunRemoteInstall(HANDLE process, const std::wstring& dllPath,
         return false;
     }
 
-    Info(L"  Install ........ running (host still suspended)...");
+    Info(L"  Install ........ running...");
 
-    // A watchdog only; nothing is sequenced by it.
     const DWORD wait = WaitForSingleObject(thread, 30000);
     DWORD exitCode = 0;
     GetExitCodeThread(thread, &exitCode);
     CloseHandle(thread);
 
-    // Only once the installer has returned: LoadConfig copies what it needs out
-    // of this buffer, but it reads it on that thread.
+    // The installer thread reads this: free only after it returns.
     if (remoteArgs != nullptr && wait == WAIT_OBJECT_0)
     {
         VirtualFreeEx(process, remoteArgs, 0, MEM_RELEASE);
@@ -288,10 +272,9 @@ bool RunRemoteInstall(HANDLE process, const std::wstring& dllPath,
 
     if (wait != WAIT_OBJECT_0)
     {
-        // Left allocated on purpose - the thread may still be about to read it.
         Fail(L"  The installer thread did not finish within 30 s. Resuming the host "
-             L"anyway; it will run unhooked. Check the payload log for the last "
-             L"step it reached.");
+             L"anyway; the install may still finish later, or never. Check the "
+             L"payload log for the last step it reached.");
         return false;
     }
     if (exitCode == 0)
@@ -300,7 +283,7 @@ bool RunRemoteInstall(HANDLE process, const std::wstring& dllPath,
         return false;
     }
 
-    Info(L"  Install ........ hooks confirmed in place before resume");
+    Info(L"  Install ........ hooks confirmed in place");
     return true;
 }
 
@@ -328,8 +311,6 @@ HANDLE CreateInstallEvent(HANDLE process, DWORD pid)
 
     std::wstring name = kInstallEventPrefix + std::to_wstring(pid);
 
-    // Inside an AppContainer an unqualified name resolves to the container's own
-    // directory, so the event has to be made there for the payload to find it.
     const PSID container =
         reinterpret_cast<TOKEN_APPCONTAINER_INFORMATION*>(buffer)->TokenAppContainer;
     if (container != nullptr)
@@ -346,9 +327,6 @@ HANDLE CreateInstallEvent(HANDLE process, DWORD pid)
         name = std::wstring(path) + L"\\" + name;
     }
 
-    // SetEvent from inside the sandbox must pass both halves of an AppContainer
-    // access check - Everyone, and ALL APPLICATION PACKAGES - and a low label,
-    // because the game runs at low integrity.
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
             L"D:(A;;0x100002;;;WD)(A;;0x100002;;;AC)S:(ML;;NW;;;LW)", SDDL_REVISION_1,
@@ -373,14 +351,10 @@ HANDLE CreateInstallEvent(HANDLE process, DWORD pid)
     }
     if (createError == ERROR_ALREADY_EXISTS)
     {
-        ResetEvent(event);   // left by an earlier game that had this pid
+        ResetEvent(event);
     }
     return event;
 }
-
-// Only the foreground process may give the foreground away, which the launcher
-// still is here. AllowSetForegroundWindow covers the case where the game's
-// window does not exist yet.
 
 namespace {
 

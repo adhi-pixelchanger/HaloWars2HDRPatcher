@@ -11,7 +11,6 @@
 namespace launcher {
 
 // --- logging --------------------------------------------------------------
-// The GUI installs a sink; callers never know where the text ends up.
 using LogSink = void (*)(const wchar_t* line, void* user);
 void SetLogSink(LogSink sink, void* user);
 void Info(const wchar_t* fmt, ...);
@@ -41,12 +40,9 @@ void GiveForegroundTo(HANDLE process, DWORD pid);
 bool RunRemoteInstall(HANDLE process, const std::wstring& dllPath,
                       const std::wstring& configArgs);
 
-// The payload sets it, the game's pid appended, when its self-install is done.
-// Hooks.h in HaloWars2HDRPatchShared carries the same text.
+// Must match kInstallEventPrefix in HaloWars2HDRPatchShared's Hooks.h.
 constexpr const wchar_t* kInstallEventPrefix = L"HaloWars2HDRPatch.InstallComplete.";
 
-// Created in the game's own AppContainer namespace, where the payload's
-// unqualified name resolves. Null if it could not be made.
 HANDLE CreateInstallEvent(HANDLE process, DWORD pid);
 std::vector<std::wstring> EnumerateModules(HANDLE process);
 bool IsModuleLoaded(HANDLE process, const std::wstring& fileName);
@@ -71,8 +67,6 @@ struct MitigationReport {
 MitigationReport QueryMitigations(HANDLE process);
 void ReportMitigations(const MitigationReport& report);
 
-// Arbitrary Code Guard refuses to make a code page writable, which only the
-// Callsite payload needs. Injection itself is unaffected.
 bool AcgBlocksPayload(const MitigationReport& report, const std::wstring& dllPath);
 
 std::wstring InjectionVerdict(const MitigationReport& report,
@@ -98,35 +92,29 @@ std::wstring FileNameOf(const std::wstring& path);
 // --- hook DLL configuration -----------------------------------------------
 enum class HookMode
 {
-    Sdr,   // whole session
-    Hdr,   // only movies matching gateFilter
+    Sdr,
+    Hdr,
 };
 
 struct HooksConfig
 {
     HookMode mode = HookMode::Hdr;
-    std::wstring gateFilter = L"MB_";   // HDR mode only
+    std::wstring gateFilter = L"MB_";
 
     bool log = false;
-    bool logToFile = false;   // needs log
+    bool logToFile = false;
 };
 
 const wchar_t* HookModeName(HookMode mode);
 
-// One '|'-separated key=value string. The same text either goes into the game's
-// memory for the installer argument, or into HW2HDRPATCH.
 std::wstring BuildHooksArgs(const HooksConfig& config);
 
-// HKCU\Environment\HW2HDRPATCH. The game is created by the activation broker,
-// so it never inherits our environment block - the registry is the only route
-// that reaches it. Set before activation, cleared straight after.
 bool HooksEnvironmentIsSet();
 bool SetHooksEnvironment(const std::wstring& value);
 bool ClearHooksEnvironment();
 
 // --- payload strategy -----------------------------------------------------
-// One hook DLL per way of intercepting DXGI, HaloWars2HDRPatch<name>.dll. The
-// order is the order the dropdowns list them in.
+// Values are dropdown indices: keep kStrategies in enum order.
 enum class Strategy
 {
     Vtable,
@@ -139,11 +127,8 @@ constexpr Strategy kDefaultStrategy = Strategy::Callsite;
 
 const wchar_t* StrategyName(Strategy strategy);
 
-// Beside the launcher.
 std::wstring StrategyDllPath(Strategy strategy);
 
-// The strategy whose DLL a path names, by file name wherever it lives; false
-// for any other file.
 bool StrategyOfPath(const std::wstring& path, Strategy* strategy);
 
 // --- orchestration --------------------------------------------------------
@@ -154,9 +139,6 @@ struct RunOptions {
     std::wstring gameArgs;
     HooksConfig hooks;
 
-    // Deliver the config through HW2HDRPATCH and let the DLL install itself,
-    // instead of calling its exported installer. Exercises the path a
-    // third-party injector would take; the resume waits on the install event.
     bool useEnvironmentConfig = false;
 };
 
@@ -164,7 +146,7 @@ struct RunResult {
     bool launched = false;
     bool injected = false;
     DWORD pid = 0;
-    std::wstring payloadPath;   // absolute; the verdict re-checks its ACL
+    std::wstring payloadPath;
     MitigationReport mitigations;
     std::wstring verdict;
 };

@@ -1,7 +1,4 @@
 // Workflow.cpp - the whole run, start to finish, independent of the GUI.
-//
-// Ordered so a failure reports where it failed: everything checkable without a
-// process first, then the process, then what needs it live, then the payload.
 
 #include "Launcher.h"
 
@@ -13,7 +10,6 @@
 namespace launcher {
 namespace {
 
-// Not exported as a linkable symbol by every SDK.
 const CLSID kClsidApplicationActivationManager = {
     0x45BA127D, 0x10A8, 0x46EA, {0x8A, 0xB7, 0x56, 0xEA, 0x90, 0x78, 0x94, 0x3C}};
 
@@ -27,17 +23,12 @@ struct ComScope {
     ~ComScope() { if (ok) CoUninitialize(); }
 };
 
-// HW2HDRPATCH is user-global while it is set, so the window it exists for has to
-// be as short as the activation itself and has to close on every path out.
 struct EnvironmentConfigScope {
     bool active = false;
+    bool cleared = false;
 
     EnvironmentConfigScope(bool wanted, const std::wstring& value) {
         if (!wanted) {
-            // A previous env-mode run that was killed before its destructor ran
-            // would otherwise still be set, and DllMain self-installs from it
-            // before our installer argument is ever read - silently overriding
-            // this launch. Clearing makes the normal path deterministic.
             if (HooksEnvironmentIsSet()) {
                 Warn(L"  HW2HDRPATCH .... a stale value was set; cleared so it "
                      L"cannot override this launch.");
@@ -50,16 +41,20 @@ struct EnvironmentConfigScope {
         if (active) {
             Info(L"  HW2HDRPATCH .... set for activation: %s", value.c_str());
         } else {
-            Warn(L"  HW2HDRPATCH .... could not be set; the payload will fall back "
-                 L"to its compiled-in defaults.");
+            Warn(L"  HW2HDRPATCH .... could not be set; the config will go in as "
+                 L"the installer argument instead.");
         }
     }
 
-    ~EnvironmentConfigScope() {
-        if (!active) return;
+    // Leaves active true: Run reads it after Clear().
+    void Clear() {
+        if (!active || cleared) return;
+        cleared = true;
         Info(L"  HW2HDRPATCH .... %s",
              ClearHooksEnvironment() ? L"cleared" : L"COULD NOT BE CLEARED");
     }
+
+    ~EnvironmentConfigScope() { Clear(); }
 
     EnvironmentConfigScope(const EnvironmentConfigScope&) = delete;
     EnvironmentConfigScope& operator=(const EnvironmentConfigScope&) = delete;
@@ -124,8 +119,8 @@ bool ResolveTarget(const RunOptions& options, std::wstring& fullName,
     if (aumid.empty()) aumid = GetFirstAumid(fullName);
 
     if (aumid.empty()) {
-        Fail(L"  Could not resolve an AUMID. Find it with:");
-        Fail(L"    Get-StartApps | Where-Object Name -like '*Halo*'");
+        Fail(L"  Could not resolve an AUMID for that package. Check the package "
+             L"filter under Advanced.");
         return false;
     }
     Info(L"  AUMID .......... %s", aumid.c_str());
@@ -184,7 +179,6 @@ std::wstring BuildVerdict(const RunResult& result, bool payloadLoaded) {
                L"is actually true.";
     }
 
-    // Loading proves nothing here: the install that follows is what ACG refuses.
     if (payloadLoaded && AcgBlocksPayload(m, result.payloadPath)) {
         return L"BLOCKED for the Callsite strategy: the payload loaded, but "
                L"Arbitrary Code Guard is set on this process and refuses the code "
@@ -197,8 +191,6 @@ std::wstring BuildVerdict(const RunResult& result, bool payloadLoaded) {
                L"its module list.";
     }
 
-    // Before the generic advice: a remote LoadLibraryW returning NULL carries
-    // no error code back, so nothing else would name this.
     if (!result.payloadPath.empty()
         && !HasAppContainerReadAccess(result.payloadPath)) {
         return L"The payload did not load, and the AppContainer still cannot read "
@@ -262,8 +254,6 @@ RunResult Run(const RunOptions& options) {
         return result;
     }
 
-    // Cleared by the destructor on every exit path, so a failure between here
-    // and the resume cannot leave the variable behind for other processes.
     EnvironmentConfigScope envConfig(options.useEnvironmentConfig,
                                      BuildHooksArgs(options.hooks));
 
@@ -271,6 +261,7 @@ RunResult Run(const RunOptions& options) {
     Rule(L"activation");
 
     const DWORD pid = ActivatePackage(aumid, options.gameArgs);
+    envConfig.Clear();
     if (pid == 0) {
         result.verdict = BuildVerdict(result, false);
         return result;
@@ -287,8 +278,6 @@ RunResult Run(const RunOptions& options) {
         return result;
     }
 
-    // Without this the host can create its swap chain and query GetDesc1
-    // before the hooks exist.
     const bool suspended = SuspendProcess(process);
     if (suspended) Info(L"  Suspended ...... all game threads frozen");
 
@@ -305,8 +294,7 @@ RunResult Run(const RunOptions& options) {
     // --- payload ----------------------------------------------------------
     Rule(L"payload injection");
 
-    // Before the load, so it already exists when the payload's self-install
-    // finishes and looks for it.
+    // Before the load: the payload's self-install looks for it.
     const bool envRoute = options.useEnvironmentConfig && envConfig.active;
     HANDLE installEvent = envRoute ? CreateInstallEvent(process, pid) : nullptr;
 
@@ -322,11 +310,6 @@ RunResult Run(const RunOptions& options) {
                        : L"ABSENT - the DLL is not mapped");
 
     if (payloadLoaded && envRoute) {
-        // Deliberately no call into the payload: LoadLibraryW is all a foreign
-        // injector would do, and DllMain has already started the install off the
-        // environment variable. It sets installEvent when done, so the game stays
-        // frozen through the install just as on the argument route. The 30 s is
-        // a watchdog only; nothing is sequenced by it.
         if (installEvent == nullptr) {
             Warn(L"  Install ........ no install event to wait on, so it is not "
                  L"confirmed before resume.");
@@ -338,9 +321,6 @@ RunResult Run(const RunOptions& options) {
                  L"check the hook log for the last step it reached.");
         }
     } else if (payloadLoaded) {
-        // envConfig.active is false here only if the variable could not be set,
-        // in which case the environment route has nothing to read and would
-        // install nothing at all.
         if (options.useEnvironmentConfig) {
             Warn(L"  Install ........ HW2HDRPATCH was not set, so that route is dead; "
                  L"falling back to the installer argument.");

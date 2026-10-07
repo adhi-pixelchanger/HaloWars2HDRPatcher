@@ -42,8 +42,7 @@ bool NameMatches(const char* importName, const wchar_t* wanted)
     return _wcsicmp(wide, wanted) == 0;
 }
 
-// Raw pointers and PODs only: nothing needing unwinding, so the SEH wrapper
-// below can enclose it.
+// Nothing needing unwinding: the SEH wrapper below encloses it.
 size_t PatchModuleImportsUnguarded(HMODULE module, const wchar_t* moduleName,
                                    const ImportPatch* patches, size_t patchCount)
 {
@@ -81,7 +80,6 @@ size_t PatchModuleImportsUnguarded(HMODULE module, const wchar_t* moduleName,
             continue;
         }
 
-        // OriginalFirstThunk keeps the names; FirstThunk is the live IAT.
         auto* nameThunk = reinterpret_cast<IMAGE_THUNK_DATA*>(
             base
             + (descriptor->OriginalFirstThunk != 0 ? descriptor->OriginalFirstThunk
@@ -111,7 +109,7 @@ size_t PatchModuleImportsUnguarded(HMODULE module, const wchar_t* moduleName,
                 void** slot = reinterpret_cast<void**>(&addressThunk->u1.Function);
                 if (*slot == patch.replacement)
                 {
-                    break;  // already ours
+                    break;
                 }
 
                 DWORD oldProtect = 0;
@@ -120,8 +118,6 @@ size_t PatchModuleImportsUnguarded(HMODULE module, const wchar_t* moduleName,
                     break;
                 }
 
-                // Blind store - the real function came from the export table,
-                // never from this slot.
                 *slot = patch.replacement;
 
                 VirtualProtect(slot, sizeof(void*), oldProtect, &oldProtect);
@@ -133,7 +129,6 @@ size_t PatchModuleImportsUnguarded(HMODULE module, const wchar_t* moduleName,
     return patched;
 }
 
-// Pure, and [[maybe_unused]] because its only caller is a Log argument.
 [[maybe_unused]] const wchar_t* LeafName(const wchar_t* path)
 {
     const wchar_t* slash = wcsrchr(path, L'\\');
@@ -149,8 +144,6 @@ size_t PatchModuleImports(HMODULE module, const wchar_t* moduleName,
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
-        // Unmapped or half-initialised underneath us; faulting would take the
-        // host down. Skipping it leaves its imports unpatched, so it is logged.
         [[maybe_unused]] const DWORD code = GetExceptionCode();
         wchar_t path[MAX_PATH] = {};
         GetModuleFileNameW(module, path, MAX_PATH);
@@ -167,7 +160,6 @@ size_t PatchImports(const wchar_t* moduleName, const ImportPatch* patches,
     size_t total = 0;
     for (HMODULE module : LoadedModules())
     {
-        // Never patch our own imports.
         wchar_t path[MAX_PATH] = {};
         GetModuleFileNameW(module, path, MAX_PATH);
         if (wcsstr(path, L"HaloWars2HDRPatch") != nullptr)

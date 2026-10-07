@@ -78,6 +78,13 @@ void DrawBar(Graphics& g, const RectF& box, const Pen& pen) {
                PointF(x + w * 0.50f, y + h * 0.73f));
 }
 
+void DrawHole(Graphics& g, const RectF& box) {
+    SolidBrush hole(Color(255, 255, 255, 255));
+    const REAL pad = box.Width * 0.28f;
+    g.FillEllipse(&hole, RectF(box.X + pad, box.Y + pad, box.Width - pad * 2.0f,
+                               box.Height - pad * 2.0f));
+}
+
 }  // namespace
 
 bool StartGraphics() {
@@ -123,18 +130,19 @@ void DrawStatus(HDC dc, const RECT& rect, Status status) {
     switch (status) {
         case Status::Success: DrawTick(graphics, box, glyph); break;
         case Status::Failure: DrawCross(graphics, box, glyph); break;
-        case Status::Warning:
-        case Status::Busy:    DrawBar(graphics, box, glyph); break;
-        case Status::Idle:
-        default: {
-            // A hollow ring reads as "nothing has happened yet".
-            SolidBrush hole(Color(255, 255, 255, 255));
-            const REAL pad = diameter * 0.28f;
-            graphics.FillEllipse(&hole, RectF(box.X + pad, box.Y + pad,
+        case Status::Warning: DrawBar(graphics, box, glyph); break;
+        case Status::Busy: {
+            DrawHole(graphics, box);
+            const REAL pad = diameter * 0.40f;
+            graphics.FillEllipse(&fill, RectF(box.X + pad, box.Y + pad,
                                               box.Width - pad * 2.0f,
                                               box.Height - pad * 2.0f));
             break;
         }
+        case Status::Idle:
+        default:
+            DrawHole(graphics, box);
+            break;
     }
 }
 

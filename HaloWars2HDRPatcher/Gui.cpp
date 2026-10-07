@@ -1,7 +1,4 @@
 // Gui.cpp - the simple dialog and the advanced panel.
-//
-// Work runs on a background thread. Log lines arrive as posted messages
-// carrying a heap string the UI frees.
 
 #include "Launcher.h"
 #include "StatusIcon.h"
@@ -29,7 +26,7 @@ constexpr UINT WM_APP_LOG = WM_APP + 1;
 constexpr UINT WM_APP_DONE = WM_APP + 2;
 
 HINSTANCE g_instance = nullptr;
-HWND g_sinkWindow = nullptr;   // dialog that owns the running job
+HWND g_sinkWindow = nullptr;
 bool g_busy = false;
 ui::Status g_status = ui::Status::Idle;
 
@@ -66,7 +63,6 @@ void FillStrategies(HWND dialog, int id) {
     }
 }
 
-// Nothing is picked only when the advanced panel's DLL path names another file.
 Strategy SelectedStrategy(HWND dialog, int id) {
     const LRESULT index = SendDlgItemMessageW(dialog, id, CB_GETCURSEL, 0, 0);
     return (index >= 0 && index < static_cast<LRESULT>(_countof(kStrategies)))
@@ -138,7 +134,6 @@ HooksConfig ReadHooksBoxes(HWND dialog) {
 
     config.log = IsChecked(dialog, IDC_HOOKSLOG);
 
-    // Same conjunction the DLL applies.
     config.logToFile = config.log && IsChecked(dialog, IDC_LOGTOFILE);
     return config;
 }
@@ -246,7 +241,6 @@ void CopyReport(HWND dialog) {
     CloseClipboard();
 }
 
-// The strategy whose DLL the path names, or none for any other file.
 void SyncStrategyToPath(HWND dialog) {
     Strategy strategy = kDefaultStrategy;
     const bool known = StrategyOfPath(GetText(dialog, IDC_DLLPATH), &strategy);
@@ -332,8 +326,6 @@ INT_PTR CALLBACK TestingProc(HWND dialog, UINT message, WPARAM wParam,
                     }
                     return TRUE;
 
-                // Each follows the other; CB_SETCURSEL sends no notification,
-                // so this cannot loop.
                 case IDC_STRATEGY:
                     if (HIWORD(wParam) == CBN_SELENDOK) {
                         SetText(dialog, IDC_DLLPATH,
@@ -388,16 +380,12 @@ std::wstring g_lastDetail;
 HWND g_testingPanel = nullptr;
 bool g_testingVisible = false;
 
-// Hidden when the advanced panel shows, so each needs a real id.
 constexpr int kSimpleControls[] = {
     IDC_HEADLINE, IDC_MODELABEL, IDC_MAINMODE, IDC_STRATEGYLABEL, IDC_MAINSTRATEGY,
     IDC_STATUSICON, IDC_STATUSTEXT, IDC_STATUSDETAIL, IDC_GO, IDC_TESTING};
 
-// Only IDD_MAIN's size is duplicated here. The panel's is measured instead,
-// because the two templates use different fonts and a dialog unit is therefore
-// not the same number of pixels in each.
-constexpr int kSimpleClientWidth = 200;    // IDD_MAIN's width
-constexpr int kSimpleClientHeight = 216;   // IDD_MAIN's height
+constexpr int kSimpleClientWidth = 200;
+constexpr int kSimpleClientHeight = 216;
 
 constexpr int kPanelTop = 4;
 constexpr int kBottomMargin = 8;
@@ -408,7 +396,6 @@ SIZE DialogUnits(HWND dialog) {
     return SIZE{rect.right, rect.bottom};
 }
 
-// The panel's template size in pixels, as the dialog manager built it.
 SIZE PanelSize() {
     RECT rect = {};
     if (g_testingPanel == nullptr || !GetWindowRect(g_testingPanel, &rect)) {

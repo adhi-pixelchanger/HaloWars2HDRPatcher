@@ -1,10 +1,4 @@
 // AppModel.cpp - finding the installed package and its AUMID.
-//
-// Package enumeration lives in the WinRT PackageManager, not Win32, so this
-// reads the launch registrations under
-//   HKCU\Software\Classes\Extensions\ContractId\Windows.Launch\PackageId
-// instead: one subkey per package full name, one ActivatableClassId below it
-// per application (the PRAID). Both halves of the AUMID, without C++/WinRT.
 
 #include "Launcher.h"
 
@@ -71,7 +65,8 @@ std::wstring FindPackageFullName(const std::wstring& needle) {
     if (matches.size() > 1) {
         Warn(L"%zu packages matched \"%s\":", matches.size(), needle.c_str());
         for (const auto& m : matches) Warn(L"    %s", m.c_str());
-        Warn(L"Using the first one. Pass --package or --aumid to be specific.");
+        Warn(L"Using the first one. Narrow the package filter under Advanced to "
+             L"be specific.");
     }
     return matches.front();
 }
@@ -85,7 +80,7 @@ std::wstring PackageFamilyFromFullName(const std::wstring& fullName) {
     status = PackageFamilyNameFromFullName(fullName.c_str(), &length, family.data());
     if (status != ERROR_SUCCESS) return L"";
 
-    family.resize(length == 0 ? 0 : length - 1);  // drop the terminator
+    family.resize(length == 0 ? 0 : length - 1);
     return family;
 }
 
@@ -101,7 +96,6 @@ std::wstring GetFirstAumid(const std::wstring& packageFullName) {
             std::vector<BYTE> buffer(bufferLength);
             status = GetPackageApplicationIds(infoRef, &bufferLength, buffer.data(), &count);
             if (status == ERROR_SUCCESS && count > 0) {
-                // The buffer starts with an array of PWSTR pointing into itself.
                 auto* ids = reinterpret_cast<PWSTR*>(buffer.data());
                 std::wstring aumid = ids[0];
                 ClosePackageInfo(infoRef);
@@ -112,7 +106,6 @@ std::wstring GetFirstAumid(const std::wstring& packageFullName) {
         if (infoRef != nullptr) ClosePackageInfo(infoRef);
     }
 
-    // Fallback: compose from the family name and the registered PRAID.
     const std::wstring family = PackageFamilyFromFullName(packageFullName);
     const std::wstring praid = FirstPraid(packageFullName);
     if (family.empty() || praid.empty()) return L"";

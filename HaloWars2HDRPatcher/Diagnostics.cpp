@@ -1,10 +1,4 @@
 // Diagnostics.cpp - whether this process can be injected at all.
-//
-// Only MicrosoftSignedOnly (Code Integrity Guard) blocks injection.
-// DisableExtensionPoints blocks SetWindowsHookEx loaders, not
-// CreateRemoteThread. No payload allocates executable memory, so Arbitrary
-// Code Guard only matters to the Callsite payload, which makes a code page
-// writable; the others write only data - vtables and import tables.
 
 #include "Launcher.h"
 
@@ -256,8 +250,6 @@ void InspectPayload(const std::wstring& dllPath) {
     const SignatureState signature = QueryAuthenticode(dllPath, &trustStatus);
     Info(L"  Signature ...... %s (0x%08X)", SignatureStateName(signature), trustStatus);
 
-    // Without this, a remote LoadLibraryW returning NULL is indistinguishable
-    // from every other reason a DLL might fail to map.
     Info(L"  AppContainer ... %s",
          HasAppContainerReadAccess(dllPath)
              ? L"grants read + execute"

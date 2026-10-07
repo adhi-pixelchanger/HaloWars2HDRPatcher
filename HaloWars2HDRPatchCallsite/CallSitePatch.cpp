@@ -1,28 +1,4 @@
 // CallSitePatch.cpp - redirecting the host's own virtual call sites.
-//
-// A vtable is shared with the calls the defining DLL makes itself; a call site
-// belongs to one caller. Rewriting the site leaves dxgi.dll untouched.
-//
-// Two encodings, each replaced by one of its own length:
-//
-//   call qword ptr [rax+0D8h]       FF 90 D8 00 00 00
-//   call qword ptr [rip+disp]       FF 15 <disp32>
-//
-//   mov rax, qword ptr [rax+0D8h]   48 8B 80 D8 00 00 00
-//   mov rax, qword ptr [rip+disp]   48 8B 05 <disp32>
-//
-// The second is a Control Flow Guard build, which calls through a dispatcher
-// that accepts our target because this DLL is not a CFG image. It is only
-// looked for in a CFG host, since it is also what a stack load looks like. A
-// slot below 16 uses an 8-bit displacement, three bytes, too short to replace.
-//
-// A displacement identifies nothing - the host reaches +0xD8 from 244 sites.
-// The interface id does: only the code that asks for IDXGIOutput6 goes on to
-// call GetDesc1 on it.
-//
-// Both replacements read the target from a page within 2GB, as far as a
-// RIP-relative operand reaches; no memory is made executable. Install time
-// only, with the game's threads frozen.
 
 #include "CallSitePatch.h"
 
@@ -81,7 +57,6 @@ const IMAGE_NT_HEADERS* HostHeaders()
     return nt->Signature == IMAGE_NT_SIGNATURE ? nt : nullptr;
 }
 
-// The host's code, or the readable rest where its constants live.
 size_t HostSections(bool executable, Range* ranges, size_t capacity)
 {
     const IMAGE_NT_HEADERS* const nt = HostHeaders();
@@ -167,7 +142,6 @@ void** ReserveSlot(void* value)
     return slot;
 }
 
-// How a guarded load is spent.
 bool IsIndirectCall(const BYTE* address, const BYTE* end)
 {
     if (end - address < 2)
@@ -182,10 +156,9 @@ bool IsIndirectCall(const BYTE* address, const BYTE* end)
     }
 
     const BYTE modrm = address[index + 1];
-    return ((modrm >> 3) & 0x07) == 2;  // /2, whatever it reads the target from
+    return ((modrm >> 3) & 0x07) == 2;
 }
 
-// Matches a whole instruction or nothing: a partial match is never rewritten.
 bool MatchSite(BYTE* address, const BYTE* end, UINT32 displacement, Site* site)
 {
     if (end - address < 8)
@@ -210,7 +183,7 @@ bool MatchSite(BYTE* address, const BYTE* end, UINT32 displacement, Site* site)
     const BYTE modrm = address[index + 1];
     if ((modrm & 0xC0) != 0x80 || (modrm & 0x07) == 0x04)
     {
-        return false;  // not the 32-bit displacement form, or a SIB byte follows
+        return false;
     }
 
     UINT32 found = 0;
@@ -224,12 +197,10 @@ bool MatchSite(BYTE* address, const BYTE* end, UINT32 displacement, Site* site)
     const size_t length = index + 2 + sizeof(UINT32);
     if (opcode == 0xFF && reg != 2)
     {
-        return false;  // /2 is the indirect call; anything else is another op
+        return false;
     }
     if (opcode == 0x8B)
     {
-        // Only a CFG host loads a slot before calling it; anywhere else this
-        // is an ordinary load.
         if ((rex & 0x08) == 0 || !HostUsesControlFlowGuard()
             || !IsIndirectCall(address + length, end))
         {
@@ -266,8 +237,6 @@ bool HasAnchor(const Site& site, const Range& range, UINT32 displacement)
     return false;
 }
 
-// All counted, kept while there is room. An anchor keeps only the sites with
-// that slot nearby.
 size_t FindSites(const Range& range, UINT32 displacement, UINT32 anchor, Site* sites,
                  size_t capacity)
 {
@@ -295,7 +264,6 @@ size_t FindSites(const Range& range, UINT32 displacement, UINT32 anchor, Site* s
     return found;
 }
 
-// The same across several ranges.
 size_t Gather(const Range* ranges, size_t rangeCount, UINT32 displacement,
               UINT32 anchor, Site* sites)
 {
@@ -309,7 +277,6 @@ size_t Gather(const Range* ranges, size_t rangeCount, UINT32 displacement,
     return found;
 }
 
-// Where the host keeps this id; there may be more than one copy.
 size_t FindIid(const IID& iid, BYTE** addresses, size_t capacity)
 {
     Range data[16] = {};
@@ -332,7 +299,6 @@ size_t FindIid(const IID& iid, BYTE** addresses, size_t capacity)
     return found;
 }
 
-// lea reg,[rip+disp32], how the host names an id.
 bool PointsAt(const BYTE* address, const BYTE* end, BYTE* const* targets,
               size_t targetCount)
 {
@@ -342,7 +308,7 @@ bool PointsAt(const BYTE* address, const BYTE* end, BYTE* const* targets,
     }
 
     const BYTE modrm = address[2];
-    if ((modrm & 0xC7) != 0x05)  // mod 00, rm 101: RIP-relative
+    if ((modrm & 0xC7) != 0x05)
     {
         return false;
     }
@@ -361,7 +327,6 @@ bool PointsAt(const BYTE* address, const BYTE* end, BYTE* const* targets,
     return false;
 }
 
-// Sites within reach of an instruction naming the id.
 size_t GatherNearIid(const Range* ranges, size_t rangeCount, UINT32 displacement,
                      const IID& iid, Site* sites)
 {
@@ -418,7 +383,6 @@ size_t GatherNearIid(const Range* ranges, size_t rangeCount, UINT32 displacement
     return found;
 }
 
-// The code around a site already found.
 bool WindowAround(const void* centre, const Range* ranges, size_t rangeCount,
                   Range* window)
 {
@@ -477,7 +441,7 @@ CallSiteOutcome WriteRedirect(const Site& site, void* replacement)
     memcpy(patch + length - sizeof(displacement), &displacement, sizeof(displacement));
     for (size_t index = length; index < site.length; ++index)
     {
-        patch[index] = 0x90;  // the spare byte a shorter replacement leaves
+        patch[index] = 0x90;
     }
 
     DWORD oldProtect = 0;
@@ -508,7 +472,6 @@ void LogSites(const wchar_t* what, size_t slot, size_t found, const Site* sites)
     }
 }
 
-// What is at that displacement, so an unknown encoding reads as itself.
 void LogDisplacementUses(const Range* ranges, size_t rangeCount, UINT32 displacement)
 {
     size_t listed = 0;
@@ -586,8 +549,6 @@ CallSiteOutcome PatchVirtualCall(const VirtualCall& call, void* replacement,
         return CallSiteOutcome::NotFound;
     }
 
-    // Beside a site already redirected: the sharpest test and the cheapest.
-    // Nothing there only means this build put the two apart.
     Range window = {};
     if (call.nearSite != nullptr && WindowAround(call.nearSite, ranges, rangeCount,
                                                  &window))
@@ -617,7 +578,6 @@ CallSiteOutcome PatchVirtualCall(const VirtualCall& call, void* replacement,
         return CallSiteOutcome::NotFound;
     }
 
-    // The id first, the slot anchor as the weaker fallback.
     if (found > 1 && call.anchorIid != nullptr)
     {
         Site beside[kMaxCandidates] = {};
@@ -625,7 +585,6 @@ CallSiteOutcome PatchVirtualCall(const VirtualCall& call, void* replacement,
             GatherNearIid(ranges, rangeCount, displacement, *call.anchorIid, beside);
         LogSites(L"of them beside the interface id", call.slot, narrowed, beside);
 
-        // An id named somewhere else entirely narrows nothing.
         if (narrowed > 0)
         {
             memcpy(candidates, beside, sizeof(candidates));

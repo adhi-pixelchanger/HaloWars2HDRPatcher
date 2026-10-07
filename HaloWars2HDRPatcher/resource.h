@@ -11,8 +11,6 @@
 
 // --- simple dialog --------------------------------------------------------
 #define IDC_HEADLINE                1100
-// A real id rather than IDC_STATIC: LayoutView hides this, and GetDlgItem(-1)
-// cannot pick one static out of several.
 #define IDC_MODELABEL               1107
 #define IDC_STATUSICON              1102
 #define IDC_STATUSTEXT              1103
@@ -41,8 +39,6 @@
 #define IDC_GATEFILTER              1070
 
 // --- advanced dialog: actions and output ----------------------------------
-// IDC_SIMPLE belongs to the panel and posts IDC_TESTING to the parent, which is
-// what lets it share a row with Launch and Copy.
 #define IDC_LAUNCH                  1041
 #define IDC_LAUNCHENV               1042
 #define IDC_COPY                    1043

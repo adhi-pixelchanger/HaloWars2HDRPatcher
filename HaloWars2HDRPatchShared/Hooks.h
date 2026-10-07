@@ -28,35 +28,28 @@ struct Config
 {
     Mode mode = Mode::Hdr;
 
-    // Semicolon-separated substrings, case insensitive; empty gates every movie.
     std::wstring gateFilter = L"MB_";
 
     bool log = _DEBUG_BOOL;
-    bool logToFile = _DEBUG_BOOL;   // needs log
+    bool logToFile = _DEBUG_BOOL;
 };
 
 constexpr const wchar_t* kBinkModule = L"bink2winrt_x64.uni10.dll";
 
-// Environment variable in an alternate injector is used
 #define HW2HDRPATCH_ENV_NAME L"HW2HDRPATCH"
 constexpr const wchar_t* kEnvVarName = HW2HDRPATCH_ENV_NAME;
 
-// The launcher's env-var route creates this event, the pid appended, and waits
-// on it before resuming the game. Launcher.h carries the same text.
+// Must match Launcher.h.
 constexpr const wchar_t* kInstallEventPrefix = L"HaloWars2HDRPatch.InstallComplete.";
 
 extern Config g_config;
 
 // --- lifecycle ------------------------------------------------------------
-// args is the '|'-separated key=value string, written into this process by the
-// launcher. Null falls back to the environment variable, then to compiled-in
-// defaults.
 void LoadConfig(const wchar_t* args);
 void InitLog();
 bool InstallHooks();
 
-// True if the environment variable is set and non-empty. Cheap enough to call
-// from DllMain: it reads the process environment block and loads nothing.
+// Called from DllMain: must load nothing.
 bool EnvironmentConfigPresent();
 
 DWORD InstallOnce(const wchar_t* args);
@@ -77,22 +70,16 @@ void LogFlush();
 // --- DXGI -----------------------------------------------------------------
 bool InstallDxgiHooks();
 
-// True only if the gate moved.
 bool OpenGate();
 bool CloseGate();
 
 // --- IAT patching ---------------------------------------------------------
-// No "original" out-parameter: the real addresses come from GetProcAddress
-// against the pinned module, not from the slot being overwritten.
 struct ImportPatch
 {
     const char* functionName;
     void* replacement;
 };
 
-// Walks every loaded module once, applying the whole set. Called during install
-// only: by then the loader has resolved the host's static imports, which is
-// where both targets live.
 size_t PatchImports(const wchar_t* moduleName, const ImportPatch* patches,
                     size_t patchCount);
 

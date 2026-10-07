@@ -1,10 +1,4 @@
 // DxgiHooks.cpp - the DXGI descriptor lie, and the gate that scopes it.
-//
-// Invariant: with the gate shut every hook returns the real object's answer
-// untouched, and no hook initiates a DXGI call of its own.
-//
-// Nothing of DXGI's is modified: the host's own call sites are redirected
-// instead, so only its calls arrive here. See CallSitePatch.cpp.
 
 #include "CallSitePatch.h"
 
@@ -18,15 +12,9 @@ namespace
 {
 
 // --- vtable slot indices ---------------------------------------------------
-// Counted from the inheritance chain, listed so each can be re-derived.
 
-// IUnknown 0-2, IDXGIObject 3-6, IDXGIOutput 7-18, IDXGIOutput1 19-22,
-// 2: 23, 3: 24, 4: 25, 5: 26, IDXGIOutput6 27 GetDesc1.
 constexpr size_t kOutputGetDesc1 = 27;
 
-// IDXGIDeviceSubObject 7, IDXGISwapChain 8-17, IDXGISwapChain1 18-28,
-// IDXGISwapChain2 29-35, IDXGISwapChain3 36 GetCurrentBackBufferIndex,
-// 37 CheckColorSpaceSupport, 38 SetColorSpace1.
 constexpr size_t kSwapChainGetCurrentBackBufferIndex = 36;
 constexpr size_t kSwapChainCheckColorSpaceSupport = 37;
 constexpr size_t kSwapChainSetColorSpace1 = 38;
@@ -48,9 +36,6 @@ bool IsHdr(DXGI_COLOR_SPACE_TYPE colorSpace)
 }
 
 // --- diagnostics ----------------------------------------------------------
-// Compiles out at HW2HDRPATCH_LOGGING 0, call sites and arguments both, so
-// nothing handed to one of these may have a side effect. Every call is logged
-// every time, per frame included: nothing here may summarise or suppress.
 
 #if HW2HDRPATCH_LOGGING
 
@@ -68,8 +53,6 @@ const wchar_t* IidName(REFIID riid)
     return L"(unrecognised)";
 }
 
-// module+offset, so a caller reads the same in every session despite ASLR. A
-// call from anywhere but the redirected site means the patch landed wrongly.
 struct Location
 {
     wchar_t text[MAX_PATH + 32];
@@ -98,7 +81,6 @@ Location Locate(const void* address)
     return location;
 }
 
-// Whether the host re-asserts HDR after a close is only visible here.
 HRESULT STDMETHODCALLTYPE HookSetColorSpace1(IDXGISwapChain3* self,
                                              DXGI_COLOR_SPACE_TYPE colorSpace)
 {
@@ -111,20 +93,15 @@ HRESULT STDMETHODCALLTYPE HookSetColorSpace1(IDXGISwapChain3* self,
 #endif  // HW2HDRPATCH_LOGGING
 
 // --- the two hooks ---------------------------------------------------------
-// Each calls the method it replaced on the object it was handed. The vtable
-// still holds DXGI's own function, so that is a plain call, not a loop.
 
 HRESULT STDMETHODCALLTYPE HookGetDesc1(IDXGIOutput6* self, DXGI_OUTPUT_DESC1* desc)
 {
     const HRESULT hr = self->GetDesc1(desc);
 
-    // One read, so the line cannot say "shut" about a call that then took the
-    // open path.
     const bool gated = IsGateOpen();
     Log(L"GetDesc1(output %p) from %s, thread %lu (0x%08X) [gate %s]", self,
         Locate(_ReturnAddress()).text, GetCurrentThreadId(), hr,
         gated ? L"open" : L"shut");
-
 
     if (FAILED(hr) || desc == nullptr || !gated)
     {
@@ -134,7 +111,6 @@ HRESULT STDMETHODCALLTYPE HookGetDesc1(IDXGIOutput6* self, DXGI_OUTPUT_DESC1* de
     desc->ColorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
     desc->BitsPerColor = 8;
 
-    // Rec.709 primaries and D65 white, so gamut-volume checks also see SDR.
     desc->RedPrimary[0] = 0.640f;
     desc->RedPrimary[1] = 0.330f;
     desc->GreenPrimary[0] = 0.300f;
@@ -169,8 +145,6 @@ HRESULT STDMETHODCALLTYPE HookCheckColorSpaceSupport(IDXGISwapChain3* self,
 }
 
 // --- the host's factories --------------------------------------------------
-// Nothing is reached through them; a factory creation is how a display change
-// reads in the log.
 
 #if HW2HDRPATCH_LOGGING
 
@@ -199,7 +173,6 @@ HRESULT WINAPI HookCreateDXGIFactory2(UINT flags, REFIID riid, void** out)
 
 void LogFactoryCreations()
 {
-    // Pinned, not loaded: resident without a load of our own.
     HMODULE dxgi = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN, L"dxgi.dll", &dxgi)
         || dxgi == nullptr)
@@ -220,8 +193,6 @@ void LogFactoryCreations()
         return;
     }
 
-    // CreateDXGIFactory is not in this host's import table; measured, the two
-    // below are the only ones it calls.
     const ImportPatch patches[] = {
         {"CreateDXGIFactory1", &HookCreateDXGIFactory1},
         {"CreateDXGIFactory2", &HookCreateDXGIFactory2},
@@ -251,8 +222,6 @@ bool CloseGate()
 
 bool InstallDxgiHooks()
 {
-    // Nothing else in the image asks for IDXGIOutput6. The fallback is the
-    // GetCurrentBackBufferIndex call that follows the poll every frame.
     const void* getDesc1Site = nullptr;
     const VirtualCall getDesc1 = {kOutputGetDesc1,
                                   kSwapChainGetCurrentBackBufferIndex, nullptr,
@@ -269,8 +238,6 @@ bool InstallDxgiHooks()
         return false;
     }
 
-    // Measured 0xD2 bytes past the poll, with SetColorSpace1 right after it.
-    // The id is no help: IDXGISwapChain3 is asked for somewhere else entirely.
     const void* checkSite = nullptr;
     const VirtualCall check = {kSwapChainCheckColorSpaceSupport,
                                kSwapChainSetColorSpace1, getDesc1Site,

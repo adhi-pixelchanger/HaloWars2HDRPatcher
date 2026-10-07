@@ -11,9 +11,6 @@ namespace
 using PfnBinkOpen = void*(__stdcall*)(const char* name, UINT32 flags);
 using PfnBinkClose = void(__stdcall*)(void* bink);
 
-// Set on a BinkOpen whose "name" is the KB2j Bink 2 magic rather than a path:
-// name then points at the video data, so it is not a string - it must not be
-// read as one, let alone filtered. The value comes from logs, not a Bink header.
 constexpr UINT32 kBinkFromMemory = 0x04000000;
 
 PfnBinkOpen g_origOpen = nullptr;
@@ -111,12 +108,11 @@ bool ResolveBinkExports()
     }
 
     HMODULE bink = nullptr;
-    // Pin flag just in case
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN, kBinkModule,
                             &bink)
         || bink == nullptr)
     {
-        return false;  // not loaded yet
+        return false;
     }
 
     auto open = reinterpret_cast<PfnBinkOpen>(GetProcAddress(bink, "BinkOpen"));

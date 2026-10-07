@@ -6,14 +6,9 @@
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 
 //////////////////////////////////////////////////////////////////////////////
-// Simple dialog - what almost everyone sees.
-//
-// One narrow column: title, mode, strategy, the two buttons, and the status row
-// last. Nothing sits beside anything else except the status text and its
-// indicator, so there is no horizontal alignment to drift.
+// Simple dialog
 
-// Width and height must match kSimpleClientWidth / kSimpleClientHeight in
-// Gui.cpp. The frame widens to the panel's own size for the advanced view.
+// Must match kSimpleClientWidth / kSimpleClientHeight in Gui.cpp.
 IDD_MAIN DIALOGEX 0, 0, 200, 216
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
 EXSTYLE WS_EX_APPWINDOW | WS_EX_CONTROLPARENT
@@ -33,27 +28,19 @@ BEGIN
     DEFPUSHBUTTON   "Launch Halo Wars 2", IDC_GO, 12, 112, 176, 18
     PUSHBUTTON      "Advanced", IDC_TESTING, 12, 134, 176, 18
 
-    // Status last: text on the left, indicator on the right.
     LTEXT           "Ready.", IDC_STATUSTEXT, 12, 162, 140, 12
     LTEXT           "", IDC_STATUSDETAIL, 12, 176, 140, 32
     CONTROL         "", IDC_STATUSICON, "Static", SS_OWNERDRAW, 162, 160, 24, 24
 END
 
 //////////////////////////////////////////////////////////////////////////////
-// Advanced dialog - everything, for investigating a new title.
-//
-// Its size is NOT duplicated in Gui.cpp; LayoutView measures this window.
-//
-// Order is deliberate: the hook DLL's own settings come first because they are
-// what anyone opening this panel came to change. Target discovery is below
-// them, and it defaults correctly.
+// Advanced dialog
 
 IDD_TESTING DIALOGEX 0, 0, 480, 414
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
 EXSTYLE WS_EX_CONTROLPARENT
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    // Settings one per line down the left, actions stacked down the right.
     GROUPBOX        "Hook DLL", IDC_STATIC, 7, 4, 466, 156
 
     LTEXT           "Strategy:", IDC_STATIC, 14, 18, 200, 8
@@ -90,7 +77,6 @@ BEGIN
     LTEXT           "AUMID:", IDC_STATIC, 14, 217, 52, 8
     EDITTEXT        IDC_AUMID, 70, 215, 396, 12, ES_AUTOHSCROLL | ES_READONLY | NOT WS_TABSTOP
 
-    // Picking a strategy fills this; a path that is not one clears the pick.
     LTEXT           "DLL:", IDC_STATIC, 14, 235, 52, 8
     EDITTEXT        IDC_DLLPATH, 70, 233, 300, 12, ES_AUTOHSCROLL
     PUSHBUTTON      "Browse...", IDC_BROWSE, 376, 232, 90, 14

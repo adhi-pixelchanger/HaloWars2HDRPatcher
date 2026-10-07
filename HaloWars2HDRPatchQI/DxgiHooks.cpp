@@ -1,13 +1,4 @@
 // DxgiHooks.cpp - the DXGI descriptor lie, and the gate that scopes it.
-//
-// Invariant: with the gate shut every override returns the real object's answer
-// untouched; an override's only DXGI calls of its own reach what it wraps.
-//
-// The install creates no factory - it redirects the host's imports of
-// CreateDXGIFactory1/2 and hands back a wrapper around what DXGI returned. The
-// swap chains and outputs the host reaches through it come back wrapped in
-// turn, which is how IDXGIOutput6::GetDesc1 and
-// IDXGISwapChain3::CheckColorSpaceSupport are reached.
 
 #include "Hooks.h"
 
@@ -43,10 +34,6 @@ bool IsHdr(DXGI_COLOR_SPACE_TYPE colorSpace)
 }
 
 // --- diagnostics ----------------------------------------------------------
-// Compiles out at HW2HDRPATCH_LOGGING 0, call sites and arguments both, so
-// nothing handed to one of these may have a side effect. Every call is logged
-// every time, per frame included: the point of this build is to show which
-// calls the host actually makes, so nothing here may summarise or suppress.
 
 #if HW2HDRPATCH_LOGGING
 
@@ -127,8 +114,6 @@ const wchar_t* FormatName(DXGI_FORMAT format)
     }
 }
 
-// An interface we do not answer for leaves the host holding the real object,
-// out of our reach from then on.
 void LogQueryInterface(const wchar_t* who, REFIID riid, bool proxied)
 {
     const int index = IidIndex(riid);
@@ -148,8 +133,6 @@ void LogQueryInterface(const wchar_t* who, REFIID riid, bool proxied)
         riid.Data4[7]);
 }
 
-// The result comes first: on a failure the descriptor fields that follow are
-// whatever was already in the caller's struct.
 void LogSwapChainDesc(const wchar_t* who, HRESULT hr,
                       const DXGI_SWAP_CHAIN_DESC1* desc)
 {
@@ -173,7 +156,6 @@ void LogSwapChainDesc(const wchar_t* who, HRESULT hr,
 
 #endif  // HW2HDRPATCH_LOGGING
 
-// Utilities to condense the injection boilerplate
 #define FORWARD_LOG(returnType, method, parameters, arguments, LogArgs) \
     returnType STDMETHODCALLTYPE method parameters override \
     {                                                       \
@@ -235,8 +217,6 @@ public:
         return refs;
     }
 
-    // --- everything below only passes the call on ---------------------------
-
     FORWARD(HRESULT, SetPrivateData, (REFGUID name, UINT size, const void* data),
             (name, size, data))
     FORWARD(HRESULT, SetPrivateDataInterface,
@@ -263,8 +243,6 @@ private:
     std::atomic<ULONG> m_refs{1};
 };
 
-// Replaces *slot with a proxy answering riid, or leaves it alone if the object
-// does not answer to the level we wrap at.
 template <typename ProxyType, typename Interface>
 bool Wrap(REFIID riid, void** slot)
 {
@@ -299,8 +277,6 @@ bool Wrap(REFIID riid, void** slot)
     return wrapped;
 }
 
-// The typed out-parameter form: the host asked for Slot, so the proxy answers
-// as Slot.
 template <typename ProxyType, typename Interface, typename Slot>
 bool Wrap(Slot** slot)
 {
@@ -308,7 +284,7 @@ bool Wrap(Slot** slot)
                                       reinterpret_cast<void**>(slot));
 }
 
-// --- the output: the descriptor lie ---------------------------------------
+// --- the output ------------------------------------------------------------
 
 class OutputProxy final : public Proxy<IDXGIOutput6>
 {
@@ -319,8 +295,6 @@ public:
     {
         const HRESULT hr = m_real->GetDesc1(desc);
 
-        // One read, so the line cannot say "shut" about a call that then took
-        // the open path.
         const bool gated = IsGateOpen();
         Log(L"OutputProxy::GetDesc1 (0x%08X) [gate %s]", hr,
             gated ? L"open" : L"shut");
@@ -333,7 +307,6 @@ public:
         desc->ColorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
         desc->BitsPerColor = 8;
 
-        // Rec.709 primaries and D65 white, so gamut-volume checks also see SDR.
         desc->RedPrimary[0] = 0.640f;
         desc->RedPrimary[1] = 0.330f;
         desc->GreenPrimary[0] = 0.300f;
@@ -348,8 +321,6 @@ public:
         desc->MaxFullFrameLuminance = 270.0f;
         return hr;
     }
-
-    // --- everything below only passes the call on ---------------------------
 
     FORWARD(HRESULT, GetDesc, (DXGI_OUTPUT_DESC* desc), (desc))
 
@@ -431,7 +402,7 @@ void WrapOutput(IDXGIOutput** output)
     Log(L"IDXGIOutput: wrapped=%d", wrapped );
 }
 
-// --- the swap chain: the way to the output ---------------------------------
+// --- the swap chain --------------------------------------------------------
 
 class SwapChainProxy final : public Proxy<IDXGISwapChain4>
 {
@@ -473,8 +444,6 @@ public:
         return result;
     }
 
-    // --- everything below only passes the call on ---------------------------
-
     FORWARD_LOG(HRESULT, GetRestrictToOutput, (IDXGIOutput** output), (output),
                 (L"[!] SwapChainProxy::GetRestrictToOutput (0x%08X) - unwrapped",
                  result))
@@ -497,8 +466,6 @@ public:
                 (L"SwapChainProxy::GetBuffer(%u, %s) (0x%08X)", buffer, IidName(riid), result))
     FORWARD(HRESULT, GetDesc, (DXGI_SWAP_CHAIN_DESC* desc), (desc))
 
-    // Measured to follow every gate edge: R8G8B8A8_UNORM when it opens,
-    // R10G10B10A2_UNORM when it shuts.
     FORWARD_LOG(HRESULT, ResizeBuffers,
                 (UINT bufferCount, UINT width, UINT height, DXGI_FORMAT newFormat,
                  UINT swapChainFlags),
@@ -506,7 +473,6 @@ public:
                 (L"host ResizeBuffers(%u buffers, %ux%u, %s, flags 0x%X) (0x%08X)",
                  bufferCount, width, height, FormatName(newFormat), swapChainFlags, result))
 
-    // Whether the host re-asserts HDR after a close is only visible here.
     FORWARD_LOG(HRESULT, SetColorSpace1, (DXGI_COLOR_SPACE_TYPE colorSpace),
                 (colorSpace),
                 (L"host SetColorSpace1(%d %s) (0x%08X)", static_cast<int>(colorSpace),
@@ -588,7 +554,7 @@ void WrapSwapChain(Slot** swapChain)
         wrapped ? L"wrapped" : L"[!] unwrapped, potentially fatal");
 }
 
-// --- the factory: the root every other object is reached through ----------
+// --- the factory -----------------------------------------------------------
 
 class FactoryProxy final : public Proxy<IDXGIFactory7>
 {
@@ -609,9 +575,6 @@ public:
         return hr;
     }
 
-    // The other two creation paths, which this host never takes. They wrap
-    // nothing, so a swap chain made through one of them would not answer the
-    // gate - hence the [!].
     HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(
         IUnknown* device, HWND hwnd, const DXGI_SWAP_CHAIN_DESC1* desc,
         const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreenDesc,
@@ -634,10 +597,6 @@ public:
         return hr;
     }
 
-    // --- everything below only passes the call on ---------------------------
-
-    // Adapters are handed back as DXGI made them: the only output the host polls
-    // GetDesc1 on comes from GetContainingOutput, never from EnumOutputs.
     FORWARD_LOG(HRESULT, EnumAdapters, (UINT index, IDXGIAdapter** adapter),
                 (index, adapter),
                 (L"FactoryProxy::EnumAdapters(%u) (0x%08X)", index, result))
@@ -773,8 +732,6 @@ bool CloseGate()
 
 bool InstallDxgiHooks()
 {
-    // Pinned, not loaded: resident for the life of the process without causing
-    // a load of our own.
     HMODULE dxgi = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN, L"dxgi.dll", &dxgi)
         || dxgi == nullptr)
@@ -794,8 +751,6 @@ bool InstallDxgiHooks()
         return false;
     }
 
-    // CreateDXGIFactory is not in this host's import table; measured, the two
-    // below are the only ones it calls.
     const ImportPatch patches[] = {
         {"CreateDXGIFactory1", &HookCreateDXGIFactory1},
         {"CreateDXGIFactory2", &HookCreateDXGIFactory2},
