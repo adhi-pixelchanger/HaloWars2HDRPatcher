@@ -615,20 +615,14 @@ HRESULT STDMETHODCALLTYPE HookForComposition(IDXGIFactory2* self, IUnknown* devi
 bool OpenGate()
 {
     const bool moved = !g_gateOpen.exchange(true);
-    if (moved)
-    {
-        Log(L"==== gate OPEN ====");
-    }
+    Log(L"==== gate %s ====", moved ? L"OPEN" : L"already open");
     return moved;
 }
 
 bool CloseGate()
 {
     const bool moved = g_gateOpen.exchange(false);
-    if (moved)
-    {
-        Log(L"==== gate SHUT ====");
-    }
+    Log(L"==== gate %s ====", moved ? L"SHUT" : L"already shut");
     return moved;
 }
 

@@ -16,10 +16,11 @@ suffixes:
 | `HaloWars2HDRPatchCallsite/` | `HaloWars2HDRPatchCallsite.dll` | rewriting the host's own call sites; the launcher's default |
 | `HaloWars2HDRPatchQI/` | `HaloWars2HDRPatchQI.dll` | handing the host proxy DXGI objects |
 
-What they have in common — config, logging, the Bink gate, import patching,
+What they have in common — config, logging, the Bink hooks, import patching,
 `dllmain.cpp` and `Hooks.h` — lives once, in `HaloWars2HDRPatchShared/`, a
-static library each DLL links. Each payload folder holds only its DXGI
-interception and a CLAUDE.md for what is specific to it.
+static library each DLL links. Each payload folder holds its own copy of the
+gate and the fix, its DXGI interception, and a CLAUDE.md for what is specific
+to it.
 
 Read the code for how it works. This file is only what the code cannot tell
 you: standing rules, and things measured on the testing machine.
@@ -66,7 +67,9 @@ you: standing rules, and things measured on the testing machine.
   configuration that is known-bad, or for an environment nobody has. Every
   injection option this project once had was removed for that reason.
 - **No config file.** Config is one `|`-separated `key=value` string, and a
-  default is a property of its own key, never of another key.
+  default is a property of its own key, never of another key. `|` because
+  `GateFilter` holds path fragments and no Windows path contains one. The
+  launcher and the DLL share no header, so each spells the separator itself.
 - **The launcher runs non-elevated.** `ActivateApplication` refuses to start
   Store apps from an elevated process, and the game is Low integrity under the
   same user anyway.
@@ -82,8 +85,9 @@ you: standing rules, and things measured on the testing machine.
   and the `DllMain` self-install exist; the argument route stays the default.
   Our launcher's env-var route still keeps the game frozen through the install:
   it creates `HaloWars2HDRPatch.InstallComplete.<pid>` before the load, and the
-  DLL sets it when `InstallOnce` finishes, success or not. Any other injector
-  creates no such event, so its load races the host's startup.
+  DLL sets it when `InstallOnce` finishes, success or not. The argument route
+  needs no event: the launcher waits on the thread that runs the install. Any
+  other injector creates no such event, so its load races the host's startup.
 - **`kBinkModule` is a constant, not a setting.** Halo Wars 2 ships exactly one
   Bink DLL and the name was *discovered* from the running process — nobody
   chose it. HW2 has no DLL plugins that touch Bink, which is also why watching
@@ -106,8 +110,8 @@ SDR mode needs (below); nothing touches `SetColorSpace1`.
 | blocking `SetHDRMetaData` | nothing; monitor metadata only |
 | blocking `CheckOverlayColorSpaceSupport` | nothing; this host never calls it |
 
-Left to itself, the host takes both its *encode* decision and its *label* from
-the descriptor. When the gate opens it re-decides through its display-change
+After swap-chain creation, the host takes both its *encode* decision and its
+*label* from the descriptor. When the gate opens it re-decides through its display-change
 handler: `ResizeBuffers` to `R8G8B8A8_UNORM`, then `CheckColorSpaceSupport` and
 its own `SetColorSpace1(SDR)`, all on the first poll after the gate opens. The
 78 ms before that poll, in this Vtable session, is the render thread stalled in
@@ -117,6 +121,7 @@ its own `SetColorSpace1(SDR)`, all on the first poll after the gate opens. The
 66.000  Present(sync 2, flags 0x0) (0x00000000)
 66.015  BinkOpen("data\ui\skins\default\videos\MB_M00_Prologue.bk2", flags=0x01104000) gated
 66.031  ==== gate OPEN ====
+  ...
 66.109  GetDesc1(0000040FF108A860) from HaloWars2_WinAppDX12Final.exe+0x81873, thread 26676 (0x00000000) [gate open]
 66.109  CreateDXGIFactory1(IDXGIFactory) (0x00000000)
   ...
@@ -184,9 +189,9 @@ covered above, and DXGI's own `GetDesc1` calls are not part of it.
   `R10G10B10A2_UNORM`, 2 buffers, flags `0x800`, flip-discard.
 - **Per frame, exactly this: `GetContainingOutput` → QI `IDXGIOutput6` →
   `GetDesc1` → `GetCurrentBackBufferIndex` → `Present`.** The first three are
-  1:1:1 with each other and with `Present`. It re-acquires the output every
-  frame instead of caching it, and it never polls `GetDesc1` on an output that
-  came from `EnumOutputs`.
+  1:1:1 with each other; `Present` ran 24 more in both sessions. It re-acquires
+  the output every frame instead of caching it, and it never polls `GetDesc1`
+  on an output that came from `EnumOutputs`.
 - On every display change it **builds a whole new factory**:
   `CreateDXGIFactory1` → `EnumAdapters(0)` → `EnumOutputs(0)` → `GetDesc` →
   `ResizeBuffers`. A payload that follows the host's factories — QI wraps each
@@ -341,3 +346,7 @@ compare against and the interceptor looked guilty by coincidence.
   initialised lazily under its own guard, which is one more thing to race.
 - The simple view is deliberately one column; anything wider belongs in the
   advanced panel.
+- **The advanced panel's Strategy dropdown and DLL path update each other**, and
+  that does not loop only because `CB_SETCURSEL` sends no notification. Picking
+  a strategy sets the path; the path's `EN_CHANGE` re-selects the strategy with
+  `CB_SETCURSEL`. Re-select it any way that notifies and it loops.

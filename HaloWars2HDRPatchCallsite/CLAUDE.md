@@ -24,8 +24,10 @@ this file is only what is specific to this payload.
   gets redirected; the dispatcher accepts our target because this DLL is not a
   CFG image. The launcher's mitigation report prints whether the host has CFG.
 - **Arbitrary Code Guard would block it**, since it refuses to make a code page
-  writable. The launcher's verdicts say so whenever ACG is set and the chosen
-  DLL is this one, and the payload logs a refusal rather than failing quietly.
+  writable. It blocks only this payload: the others write data pages alone —
+  vtables and import slots — which ACG allows, and injection is unaffected. The
+  launcher's verdicts say so whenever ACG is set and the chosen DLL is this
+  one, and the payload logs a refusal rather than failing quietly.
 - **A displacement identifies nothing.** Measured: **244** call sites reach
   `+0xD8` (1053 before ordinary stack loads were excluded), **139** reach
   `+0x128`, **57** reach `+0x130`. Requiring the `GetCurrentBackBufferIndex`
